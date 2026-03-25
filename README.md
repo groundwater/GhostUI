@@ -41,9 +41,9 @@ Open the display UI at `http://localhost:7861/display/0`.
 
 - `macOS/GhostUI/` - Swift app, overlays, services, and resources.
 - `ghost/src/` - daemon, CRDT, CLI, app adapters, and display UI source.
-- `../Documents/Context-Menus.md` - context menu behavior notes.
+- `../Documents/Developer/Reference/Context-Menus.md` - context menu behavior notes.
 - `../Documents/Data/A11y/` - accessibility capture corpus and schemas.
-- `../Documents/macOS-Icons.md` - icon workflow notes.
+- `../Documents/Developer/Reference/macOS-Icons.md` - icon workflow notes.
 
 ## Notes
 
