@@ -104,27 +104,12 @@ export interface SelectedForestResult {
   matchCount: number;
 }
 
+const PRESERVE_CONTAINER_ATTRS = Symbol("preserveContainerAttrs");
+
 export function filterTree(root: PlainNode, queries: QueryNode[]): FilterResult {
-  const results: PlainNode[] = [];
-  for (const q of queries) {
-    // Phase 1: collect all nodes matching tag+id+predicates
-    const candidates = collectCandidates(root, q);
-    // Phase 2: apply nth-child slice
-    const selected = nthChildSlice(candidates, q);
-    // Phase 3: finalize each — apply child queries, projection, wrap in ancestor path
-    for (const { node, path } of selected) {
-      const finalized = finalizeMatch(node, q);
-      if (finalized) {
-        for (const item of finalized) {
-          results.push(queryOmitsAncestors(q) ? item : wrapInPath(item, path));
-        }
-      }
-    }
-  }
-
-  const matchCount = results.length;
-
-  return { nodes: mergeResults(results).map(stripContainerAttrs), matchCount };
+  const selection = selectForestMatchesWithCardinality([root], queries, "all");
+  const { results, matchCount } = collectMaterializedMatchResults(selection.matches);
+  return { nodes: finalizeMaterializedMatches(results), matchCount };
 }
 
 interface SelectedCandidate extends Candidate {
@@ -190,18 +175,8 @@ export function materializeSelectedMatches(
   selected: SelectedForestMatch[],
   options: { rootless?: boolean; merge?: boolean } = {},
 ): PlainNode[] {
-  const { rootless = false, merge = true } = options;
-  const results: PlainNode[] = [];
-  for (const { node, path, query } of selected) {
-    const finalized = finalizeMatch(node, query);
-    if (!finalized) continue;
-    for (const item of finalized) {
-      results.push(rootless || queryOmitsAncestors(query) ? item : wrapInPath(item, path));
-    }
-  }
-
-  const shaped = merge ? mergeResults(results) : results;
-  return shaped.map(stripContainerAttrs);
+  const { results } = collectMaterializedMatchResults(selected, options);
+  return finalizeMaterializedMatches(results, options);
 }
 
 /** Info about an app with obscured windows. */
@@ -284,6 +259,54 @@ function cloneNodeSymbols<T extends PlainNode>(target: T, source: PlainNode): T 
     Reflect.set(target, symbol, Reflect.get(source, symbol));
   }
   return target;
+}
+
+function shouldPreserveQueryContainerAttrs(query: QueryNode): boolean {
+  return query.introspect === "**" && !query.introspectRemainder;
+}
+
+function preserveMaterializedNode(node: PlainNode, query: QueryNode): PlainNode {
+  return shouldPreserveQueryContainerAttrs(query)
+    ? markSubtreePreserveContainerAttrs(node)
+    : node;
+}
+
+function collectMaterializedMatchResults(
+  selected: SelectedForestMatch[],
+  options: { rootless?: boolean } = {},
+): { results: PlainNode[]; matchCount: number } {
+  const { rootless = false } = options;
+  const results: PlainNode[] = [];
+  for (const { node, path, query } of selected) {
+    const finalized = finalizeMatch(node, query);
+    if (!finalized) continue;
+    for (const item of finalized) {
+      const wrapped = rootless || queryOmitsAncestors(query) ? item : wrapInPath(item, path);
+      results.push(preserveMaterializedNode(wrapped, query));
+    }
+  }
+  return { results, matchCount: results.length };
+}
+
+function finalizeMaterializedMatches(
+  results: PlainNode[],
+  options: { merge?: boolean } = {},
+): PlainNode[] {
+  const { merge = true } = options;
+  const shaped = merge ? mergeResults(results) : results;
+  return shaped.map(stripContainerAttrs);
+}
+
+function markSubtreePreserveContainerAttrs(node: PlainNode): PlainNode {
+  Reflect.set(node, PRESERVE_CONTAINER_ATTRS, true);
+  if (node._children) {
+    node._children.forEach(markSubtreePreserveContainerAttrs);
+  }
+  return node;
+}
+
+function preservesContainerAttrs(node: PlainNode): boolean {
+  return Reflect.get(node, PRESERVE_CONTAINER_ATTRS) === true;
 }
 
 /** Modal role tags that block interaction with sibling elements. */
@@ -513,8 +536,11 @@ function collectChildMatches(
           const finalized = finalizeMatch(n, q);
           if (finalized) {
             for (const item of finalized) {
+              const materialized = preserveMaterializedNode(item, q);
               matchedChildren.push(
-                queryOmitsAncestors(q) || eraseScopeHierarchy ? item : wrapInPath(item, relativePath),
+                queryOmitsAncestors(q) || eraseScopeHierarchy
+                  ? materialized
+                  : wrapInPath(materialized, relativePath),
               );
             }
           }
@@ -532,7 +558,7 @@ function collectChildMatches(
     if (q.tag === "**" && q.index === undefined && !q.predicates && !q.children?.length) {
       if (searchableChildren.length > 0) {
         const mapper = q.introspect === "*" ? keysOnlyRecursive : q.introspect ? (n: PlainNode) => n : stripLeafAttrs;
-        matchedChildren.push(...searchableChildren.map(mapper));
+        matchedChildren.push(...searchableChildren.map((child) => preserveMaterializedNode(mapper(child), q)));
       }
       continue;
     }
@@ -565,10 +591,11 @@ function collectChildMatches(
         // Wrap in ancestor path (relative to parent node) to preserve containers
         const relativePath = path.filter(p => p !== node);
         for (const item of finalized) {
+          const materialized = preserveMaterializedNode(item, q);
           matchedChildren.push(
             queryOmitsAncestors(q) || eraseScopeHierarchy
-              ? item
-              : wrapInPath(item, relativePath),
+              ? materialized
+              : wrapInPath(materialized, relativePath),
           );
         }
       }
@@ -744,7 +771,6 @@ function containerDisplayNameAttrs(tag: string): readonly string[] {
  * Container ids are replaced with the best meaningful attr value.
  */
 function stripContainerAttrs(node: PlainNode): PlainNode {
-  if (!node._children || node._children.length === 0) return node;
   // Truncate visual-only windows
   if (isWindowVisualOnly(node)) {
     return buildVisualOnlyWindow(node);
@@ -752,6 +778,10 @@ function stripContainerAttrs(node: PlainNode): PlainNode {
   // Truncate obscured windows
   if (isWindowEffectivelyObscured(node)) {
     return buildObscuredWindow(node);
+  }
+  if (!node._children || node._children.length === 0) return node;
+  if (preservesContainerAttrs(node)) {
+    return sanitizeMaterializedTree(node);
   }
   const container: PlainNode = cloneNodeSymbols({ _tag: node._tag } as PlainNode, node);
   if (node._frame !== undefined) container._frame = node._frame;
@@ -784,6 +814,21 @@ function stripContainerAttrs(node: PlainNode): PlainNode {
 
   container._children = node._children.map(stripContainerAttrs);
   return container;
+}
+
+export function sanitizeMaterializedTree(node: PlainNode): PlainNode {
+  if (isWindowVisualOnly(node)) {
+    return buildVisualOnlyWindow(node);
+  }
+  if (isWindowEffectivelyObscured(node)) {
+    return buildObscuredWindow(node);
+  }
+  if (!node._children || node._children.length === 0) {
+    return node;
+  }
+  const sanitized = cloneNodeSymbols({ ...node } as PlainNode, node);
+  sanitized._children = node._children.map(sanitizeMaterializedTree);
+  return sanitized;
 }
 
 /** Recursively strip attributes from leaf nodes (used by ** subtree expansion). */

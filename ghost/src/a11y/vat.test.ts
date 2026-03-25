@@ -128,6 +128,85 @@ describe("a11y VAT driver", () => {
     expect(tree.tree._children?.[0]?._children?.[0]?._children?.[0]?._tag).toBe("Button");
   });
 
+  test("preserves requested container attrs like frame in raw AX VAT mounts", () => {
+    __setNativeAXForTests(makeMockNativeAX({
+      wsGetRunningApps: () => [
+        { pid: 123, bundleId: "com.example.Codex", name: "Codex", regular: true },
+      ],
+      axSnapshot: () => ({
+        role: "AXApplication",
+        title: "Codex",
+        frame: { x: 10, y: 20, width: 1200, height: 800 },
+        children: [
+          {
+            role: "AXWindow",
+            title: "Editor",
+            frame: { x: 20, y: 40, width: 1000, height: 700 },
+            children: [
+              {
+                role: "AXButton",
+                title: "Run",
+                frame: { x: 100, y: 120, width: 80, height: 28 },
+                children: [],
+              },
+            ],
+          },
+        ],
+      }),
+    }));
+
+    const tree = buildA11yVatMountTree({
+      path: "/Codex",
+      driver: "a11y",
+      args: ["Application#Codex { **[**] }"],
+    });
+
+    expect(tree.tree._children?.[0]?._children?.[0]?.frame).toBe("(20,40,1000,700)");
+    expect(tree.tree._children?.[0]?._children?.[0]?._children?.[0]?.frame).toBe("(100,120,80,28)");
+  });
+
+  test("still collapses visual-only windows in serialized AX VAT mounts", () => {
+    __setNativeAXForTests(makeMockNativeAX({
+      wsGetRunningApps: () => [
+        { pid: 123, bundleId: "com.example.Codex", name: "Codex", regular: true },
+      ],
+    }));
+
+    const payload = JSON.stringify([
+      {
+        type: "ax.query-match",
+        pid: 123,
+        node: {
+          _tag: "Application",
+          title: "Codex",
+          _children: [
+            {
+              _tag: "Window",
+              title: "Editor",
+              visualOnly: "true",
+              frame: "(20,40,1000,700)",
+              _children: [
+                { _tag: "Button", title: "Run", frame: "(100,120,80,28)" },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+
+    const tree = buildA11yVatMountTree({
+      path: "/Codex",
+      driver: "a11y",
+      args: [VAT_A11Y_STDIN_AX_QUERY_ARG, payload],
+    });
+
+    const window = tree.tree._children?.[0]?._children?.[0];
+    expect(window?.visualOnly).toBe("true");
+    expect(window?.frame).toBeUndefined();
+    expect(window?._children?.[0]?._tag).toBe("_truncated");
+    expect(window?._children?.[0]?._truncatedLabel).toBe("deflated");
+  });
+
   test("mounts serialized AX query matches from stdin without collapsing to the wrapper root", () => {
     __setNativeAXForTests(makeMockNativeAX({
       wsGetRunningApps: () => [
@@ -360,5 +439,49 @@ describe("a11y VAT driver", () => {
     expect(tree.tree._children?.[0]?._tag).toBe("Application");
     expect(tree.tree._children?.[0]?._children?.[0]?._tag).toBe("Window");
     expect(tree.tree._children?.[0]?._children?.[0]?._children?.[0]?._tag).toBe("Button");
+  });
+
+  test("preserves requested container attrs when rebuilding stdin-backed mounts from an AX query plan", () => {
+    __setNativeAXForTests(makeMockNativeAX({
+      wsGetRunningApps: () => [
+        { pid: 123, bundleId: "com.example.Codex", name: "Codex", regular: true },
+      ],
+      axSnapshot: () => ({
+        role: "AXApplication",
+        title: "Codex",
+        frame: { x: 10, y: 20, width: 1200, height: 800 },
+        children: [
+          {
+            role: "AXWindow",
+            title: "Editor",
+            frame: { x: 20, y: 40, width: 1000, height: 700 },
+            children: [
+              {
+                role: "AXButton",
+                title: "Run",
+                frame: { x: 100, y: 120, width: 80, height: 28 },
+                children: [],
+              },
+            ],
+          },
+        ],
+      }),
+    }));
+
+    const plan: VatA11YQueryPlan = {
+      type: "vat.a11y-query-plan",
+      query: "Application#Codex { **[**] }",
+      cardinality: "all",
+      scope: { kind: "app", app: "Codex" },
+    };
+
+    const tree = buildA11yVatMountTree({
+      path: "/Codex",
+      driver: "a11y",
+      args: [VAT_A11Y_STDIN_AX_QUERY_PLAN_ARG, JSON.stringify(plan)],
+    });
+
+    expect(tree.tree._children?.[0]?._children?.[0]?.frame).toBe("(20,40,1000,700)");
+    expect(tree.tree._children?.[0]?._children?.[0]?._children?.[0]?.frame).toBe("(100,120,80,28)");
   });
 });

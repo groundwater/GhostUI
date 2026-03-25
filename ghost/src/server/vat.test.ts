@@ -627,6 +627,85 @@ describe("VAT routes", () => {
     expect(treeBody.tree._children?.[0]?._children?.[0]?._children?.[0]?._id).toBe("Run updated");
   });
 
+  test("query-plan mounts preserve full-introspection attrs through a subsequent VAT query", async () => {
+    __setNativeAXForTests(makeMockNativeAX({
+      wsGetRunningApps: () => [
+        { pid: 123, bundleId: "com.example.Codex", name: "Codex", regular: true },
+      ],
+      axSnapshot: () => ({
+        role: "AXApplication",
+        title: "Codex",
+        frame: { x: 10, y: 20, width: 1200, height: 800 },
+        children: [
+          {
+            role: "AXWindow",
+            title: "Editor",
+            frame: { x: 20, y: 40, width: 1000, height: 700 },
+            children: [
+              {
+                role: "AXButton",
+                title: "Run",
+                frame: { x: 100, y: 120, width: 80, height: 28 },
+                children: [],
+              },
+            ],
+          },
+        ],
+      }),
+    }));
+
+    const plan: VatA11YQueryPlan = {
+      type: "vat.a11y-query-plan",
+      query: "@Application#Codex//*[**]",
+      cardinality: "all",
+      scope: { kind: "app", app: "Codex" },
+    };
+    const registry = createVatRegistry();
+
+    const mountRes = await handleVAT(
+      new Request("http://localhost:7861/api/vat/mount", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: "/Codex",
+          driver: "a11y",
+          args: [VAT_A11Y_STDIN_AX_QUERY_PLAN_ARG, JSON.stringify(plan)],
+        }),
+      }),
+      registry,
+    );
+
+    expect(mountRes).not.toBeNull();
+    expect((mountRes as Response).status).toBe(200);
+
+    const fullQueryRes = await handleVAT(
+      new Request(`http://localhost:7861/api/vat/query?q=${encodeURIComponent("Codex/Window[**]")}`),
+      registry,
+    );
+    expect(fullQueryRes).not.toBeNull();
+    expect((fullQueryRes as Response).status).toBe(200);
+    const fullQueryBody = await (fullQueryRes as Response).json();
+    const fullWindow = fullQueryBody.nodes?.[0]?._children?.[0]?._children?.[0];
+    expect(fullQueryBody.matchCount).toBe(1);
+    expect(fullWindow?.frame).toBe("(20,40,1000,700)");
+    expect(fullWindow?.title).toBe("Editor");
+    expect(fullWindow?._children).toBeUndefined();
+
+    const keysOnlyRes = await handleVAT(
+      new Request(`http://localhost:7861/api/vat/query?q=${encodeURIComponent("Codex/Window[*] { Button }")}`),
+      registry,
+    );
+    expect(keysOnlyRes).not.toBeNull();
+    expect((keysOnlyRes as Response).status).toBe(200);
+    const keysOnlyBody = await (keysOnlyRes as Response).json();
+    const keysOnlyWindow = keysOnlyBody.nodes?.[0]?._children?.[0]?._children?.[0];
+    expect(keysOnlyBody.matchCount).toBe(1);
+    expect(keysOnlyWindow?.frame).toBeUndefined();
+    expect(keysOnlyWindow?._frame).toBe(true);
+    expect(keysOnlyWindow?.title).toBeUndefined();
+    expect(keysOnlyWindow?._children?.[0]?._frame).toBe("(100,120,80,28)");
+  });
+
   test("updates mount policy and eagerly activates always mounts", async () => {
     const registry = createVatRegistry();
     await handleVAT(

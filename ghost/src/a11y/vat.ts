@@ -1,5 +1,5 @@
 import { getAppMetadata, resolveAXQuerySubtree, snapshotApp } from "./native-ax.js";
-import { materializeSelectedMatches } from "../cli/filter.js";
+import { materializeSelectedMatches, sanitizeMaterializedTree } from "../cli/filter.js";
 import { selectAXQueryMatches, serializeAXSelectionMatches } from "./ax-query.js";
 import { assertAXQueryMatch, type AXNode, type AXQueryMatch } from "../cli/ax.js";
 import { wrapVatMountPath } from "../vat/path.js";
@@ -165,7 +165,7 @@ function buildVatTreeFromSerializedMatches(
   )];
 
   return {
-    tree: wrapVatMountPath(request.path, selectSerializedMatchRoots(matches)),
+    tree: sanitizeMaterializedTree(wrapVatMountPath(request.path, selectSerializedMatchRoots(matches))),
     observedBundleIds,
     observedPids,
   };
@@ -400,7 +400,8 @@ export function buildA11yVatMountTree(request: VatMountRequest): VatMountBuild {
 
   const mounted = wrapVatMountPath(
     request.path,
-    materializeSelectedMatches(selection.selected).map((node) => clonePlainNode(node as VatNode)),
+    materializeSelectedMatches(selection.selected)
+      .map((node) => clonePlainNode(node as VatNode)),
   );
   const { observedBundleIds, observedPids } = deriveObserverKeys(
     selection.matches.map((match) => match.source.pid),
@@ -408,7 +409,7 @@ export function buildA11yVatMountTree(request: VatMountRequest): VatMountBuild {
   );
 
   return {
-    tree: mounted,
+    tree: sanitizeMaterializedTree(mounted),
     observedBundleIds,
     observedPids,
   };

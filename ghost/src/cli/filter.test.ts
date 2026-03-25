@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { findMatchedNodeWithContext } from "./filter.js";
+import { findMatchedNodeWithContext, materializeSelectedMatches, selectForestMatchesWithCardinality } from "./filter.js";
 import { parseQuery } from "./query.js";
 import { toGUIML } from "./guiml.js";
 import type { PlainNode } from "./types.js";
@@ -418,6 +418,112 @@ describe("filterTree — wildcard queries", () => {
     expect(guiml).toContain("<Group#0 />");
     // Button is a grandchild — must NOT appear under direct-child semantics
     expect(guiml).not.toContain("<Button#Save />");
+  });
+});
+
+describe("materializeSelectedMatches", () => {
+  const windowTree: PlainNode = {
+    _tag: "Window",
+    _id: "Window:Editor:0",
+    title: "Editor",
+    frame: { x: 20, y: 40, width: 1000, height: 700 },
+    _children: [
+      {
+        _tag: "Button",
+        _id: "Button:Run:0",
+        title: "Run",
+        frame: { x: 100, y: 120, width: 80, height: 28 },
+      },
+    ],
+  };
+
+  test("preserves container attrs for full introspection queries", () => {
+    const selection = selectForestMatchesWithCardinality([windowTree], parseQuery("Window[**] { Button }"), "all");
+    const [window] = materializeSelectedMatches(selection.matches);
+
+    expect(window.frame).toEqual({ x: 20, y: 40, width: 1000, height: 700 });
+    expect(window.title).toBe("Editor");
+    expect(window._children?.[0]?._frame).toEqual({ x: 100, y: 120, width: 80, height: 28 });
+  });
+
+  test("still strips container attrs for partial introspection queries", () => {
+    const selection = selectForestMatchesWithCardinality([windowTree], parseQuery("Window[*] { Button }"), "all");
+    const [window] = materializeSelectedMatches(selection.matches);
+
+    expect(window.frame).toBeUndefined();
+    expect(window._frame).toBe(true);
+    expect(window.title).toBeUndefined();
+    expect(window._children?.[0]?._frame).toEqual({ x: 100, y: 120, width: 80, height: 28 });
+  });
+
+  test("preserves nested full-introspection child queries without call-site overrides", () => {
+    const appTree: PlainNode = {
+      _tag: "Application",
+      _id: "app:com.example.Codex",
+      title: "Codex",
+      frame: { x: 10, y: 20, width: 1200, height: 800 },
+      _children: [windowTree],
+    };
+
+    const selection = selectForestMatchesWithCardinality([appTree], parseQuery("Application#Codex { **[**] }"), "all");
+    const [app] = materializeSelectedMatches(selection.matches);
+    const window = app._children?.[0];
+
+    expect(window?.frame).toEqual({ x: 20, y: 40, width: 1000, height: 700 });
+    expect(window?.title).toBe("Editor");
+    expect(window?._children?.[0]?.frame).toEqual({ x: 100, y: 120, width: 80, height: 28 });
+  });
+});
+
+describe("filterTree — full introspection preservation", () => {
+  const tree: PlainNode = {
+    _tag: "VATRoot",
+    _children: [
+      {
+        _tag: "Codex",
+        _children: [
+          {
+            _tag: "Window",
+            _id: "Window:Editor:0",
+            title: "Editor",
+            frame: "(20,40,1000,700)",
+            _children: [
+              {
+                _tag: "Button",
+                _id: "Button:Run:0",
+                title: "Run",
+                frame: "(100,120,80,28)",
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  function selectedWindow(node: PlainNode): PlainNode | undefined {
+    return node._children?.[0]?._children?.[0];
+  }
+
+  test("Codex/Window[**] keeps container attrs on the queried VAT subtree", () => {
+    const result = filterTree(tree, parseQuery("Codex/Window[**]"));
+    const window = selectedWindow(result.nodes[0]!);
+
+    expect(result.matchCount).toBe(1);
+    expect(window?.frame).toBe("(20,40,1000,700)");
+    expect(window?.title).toBe("Editor");
+    expect(window?._children).toBeUndefined();
+  });
+
+  test("Codex/Window[*] { Button } still strips container attrs on container windows", () => {
+    const result = filterTree(tree, parseQuery("Codex/Window[*] { Button }"));
+    const window = selectedWindow(result.nodes[0]!);
+
+    expect(result.matchCount).toBe(1);
+    expect(window?.frame).toBeUndefined();
+    expect(window?._frame).toBe(true);
+    expect(window?.title).toBeUndefined();
+    expect(window?._children?.[0]?._frame).toBe("(100,120,80,28)");
   });
 });
 
