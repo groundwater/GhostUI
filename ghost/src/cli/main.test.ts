@@ -27,6 +27,7 @@ import {
   DEFAULT_GFX_ARROW_DURATION_MS,
   DEFAULT_GFX_ARROW_LENGTH,
   DEFAULT_GFX_ARROW_SIZE,
+  DEFAULT_GFX_ARROW_TARGET,
   DEFAULT_GFX_XRAY_DURATION_MS,
   formatVatMountOutput,
   formatVatMountsOutput,
@@ -1394,6 +1395,25 @@ describe("ca highlight AX bridge", () => {
     });
   });
 
+  test("builds gfx arrow draw scripts from the requested target anchor", () => {
+    const script = buildGfxArrowDrawScriptFromText(JSON.stringify(target), {
+      target: "bottomright",
+    });
+
+    expect(script.items[0]).toMatchObject({
+      from: {
+        line: {
+          from: { x: 180 - DEFAULT_GFX_ARROW_LENGTH, y: 140 - DEFAULT_GFX_ARROW_LENGTH },
+          to: { x: 180 - DEFAULT_GFX_ARROW_LENGTH, y: 140 - DEFAULT_GFX_ARROW_LENGTH },
+        },
+      },
+      line: {
+        from: { x: 180 - DEFAULT_GFX_ARROW_LENGTH, y: 140 - DEFAULT_GFX_ARROW_LENGTH },
+        to: { x: 180, y: 140 },
+      },
+    });
+  });
+
   test("builds gfx scan overlay requests without outline rects", () => {
     const tree: PlainNode = {
       _tag: "VATRoot",
@@ -1429,16 +1449,29 @@ describe("ca highlight AX bridge", () => {
     expect(args).toEqual(["-"]);
   });
 
-  test("parses gfx arrow options, including --from overriding the start point", () => {
-    const args = ["--color", "#00FF00", "--size", "9", "--length", "180", "--duration", "700", "--from", "12", "34", "-"];
+  test("parses gfx arrow options, including --target and --from overriding the start point", () => {
+    const args = ["--color", "#00FF00", "--size", "9", "--length", "180", "--duration", "700", "--target", "left", "--from", "12", "34", "-"];
     expect(parseGfxArrowOptions(args, "gfx arrow")).toEqual({
       color: "#00FF00",
       size: 9,
       length: 180,
       durationMs: 700,
+      target: "left",
       from: { x: 12, y: 34 },
     });
     expect(args).toEqual(["-"]);
+  });
+
+  test("parses gfx arrow options with center target by default", () => {
+    const args = ["-"];
+    expect(parseGfxArrowOptions(args, "gfx arrow")).toEqual({
+      color: DEFAULT_GFX_ARROW_COLOR,
+      size: DEFAULT_GFX_ARROW_SIZE,
+      length: DEFAULT_GFX_ARROW_LENGTH,
+      durationMs: DEFAULT_GFX_ARROW_DURATION_MS,
+      target: DEFAULT_GFX_ARROW_TARGET,
+      from: undefined,
+    });
   });
 
   test("builds gfx arrow draw scripts from an explicit origin", () => {
@@ -1448,6 +1481,7 @@ describe("ca highlight AX bridge", () => {
       size: 9,
       length: 180,
       durationMs: 700,
+      target: "top",
     });
 
     expect(script.items[0]).toMatchObject({
@@ -1459,7 +1493,7 @@ describe("ca highlight AX bridge", () => {
       },
       line: {
         from: { x: 12, y: 34 },
-        to: { x: 140, y: 120 },
+        to: { x: 140, y: 100 },
       },
       style: {
         stroke: "#00FF00",

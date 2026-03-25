@@ -148,12 +148,13 @@ describe("cli help rendering", () => {
     expect(help).toContain("gui gfx scan [--duration <milliseconds>] -");
     expect(help).toContain("gui gfx xray [--duration <milliseconds>] -");
     expect(help).toContain("gui gfx spotlight [--duration <milliseconds>] -");
-    expect(help).toContain("gui gfx arrow [--color <hex>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--from <x> <y>] -");
+    expect(help).toContain("gui gfx arrow [--color <hex>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--target <anchor>] [--from <x> <y>] -");
     expect(help).toContain("share the same target contract");
     expect(help).toContain("only drives the red scan-line overlay");
     expect(help).toContain("dims the complement outside that union");
     expect(help).toContain("`spotlight` accepts --duration and defaults to 1200ms");
-    expect(help).toContain("defaults to color `#FF3B30`, size `6`, length `100`, and duration `400`");
+    expect(help).toContain("defaults to color `#FF3B30`, size `6`, length `100`, duration `400`, and target `center`");
+    expect(help).toContain("Use --target with center, topleft, topright, bottomleft, bottomright, left, top, right, or bottom");
     expect(help).toContain("`scan` defaults to 500ms. `xray` defaults to 650ms. `spotlight` and `outline` default to 1200ms. `arrow` defaults to 400ms.");
     expect(help).toContain("Duplicate bounds are deduplicated");
     expect(help).toContain("`gfx write` is intentionally not shipped.");

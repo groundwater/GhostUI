@@ -1418,6 +1418,17 @@ export const DEFAULT_GFX_ARROW_DURATION_MS = 400;
 export const DEFAULT_GFX_ARROW_COLOR = "#FF3B30";
 export const DEFAULT_GFX_ARROW_SIZE = 6;
 export const DEFAULT_GFX_ARROW_LENGTH = 100;
+export type GfxArrowTarget =
+  | "center"
+  | "topleft"
+  | "topright"
+  | "bottomleft"
+  | "bottomright"
+  | "left"
+  | "top"
+  | "right"
+  | "bottom";
+export const DEFAULT_GFX_ARROW_TARGET: GfxArrowTarget = "center";
 
 function normalizeHighlightRect(value: unknown): CLICompositionRect | null {
   if (typeof value === "string") {
@@ -1572,30 +1583,58 @@ export interface GfxArrowOptions {
   size: number;
   length: number;
   durationMs: number;
+  target: GfxArrowTarget;
   from?: { x: number; y: number };
+}
+
+function arrowTargetPoint(rect: CLICompositionRect, target: GfxArrowTarget): { x: number; y: number } {
+  const left = rect.x;
+  const centerX = rect.x + rect.width / 2;
+  const right = rect.x + rect.width;
+  const top = rect.y;
+  const centerY = rect.y + rect.height / 2;
+  const bottom = rect.y + rect.height;
+  switch (target) {
+    case "topleft":
+      return { x: left, y: top };
+    case "topright":
+      return { x: right, y: top };
+    case "bottomleft":
+      return { x: left, y: bottom };
+    case "bottomright":
+      return { x: right, y: bottom };
+    case "left":
+      return { x: left, y: centerY };
+    case "top":
+      return { x: centerX, y: top };
+    case "right":
+      return { x: right, y: centerY };
+    case "bottom":
+      return { x: centerX, y: bottom };
+    case "center":
+    default:
+      return { x: centerX, y: centerY };
+  }
 }
 
 function buildArrowItems(rects: CLICompositionRect[], options: GfxArrowOptions): DrawScript["items"] {
   const items: DrawScript["items"] = [];
   for (const rect of rects) {
-    const center = {
-      x: rect.x + rect.width / 2,
-      y: rect.y + rect.height / 2,
-    };
+    const targetPoint = arrowTargetPoint(rect, options.target);
     const start = options.from ?? {
-      x: center.x - options.length,
-      y: center.y - options.length,
+      x: targetPoint.x - options.length,
+      y: targetPoint.y - options.length,
     };
-    const angle = Math.atan2(center.y - start.y, center.x - start.x);
+    const angle = Math.atan2(targetPoint.y - start.y, targetPoint.x - start.x);
     const headLength = Math.max(options.size * 3, options.size + 6);
     const headSpread = Math.PI / 7;
     const left = {
-      x: center.x - headLength * Math.cos(angle - headSpread),
-      y: center.y - headLength * Math.sin(angle - headSpread),
+      x: targetPoint.x - headLength * Math.cos(angle - headSpread),
+      y: targetPoint.y - headLength * Math.sin(angle - headSpread),
     };
     const right = {
-      x: center.x - headLength * Math.cos(angle + headSpread),
-      y: center.y - headLength * Math.sin(angle + headSpread),
+      x: targetPoint.x - headLength * Math.cos(angle + headSpread),
+      y: targetPoint.y - headLength * Math.sin(angle + headSpread),
     };
     const style = {
       stroke: options.color,
@@ -1606,21 +1645,21 @@ function buildArrowItems(rects: CLICompositionRect[], options: GfxArrowOptions):
       {
         kind: "line" as const,
         from: { line: { from: start, to: start }, lineWidth: options.size, stroke: options.color, opacity: 1 },
-        line: { from: start, to: center },
+        line: { from: start, to: targetPoint },
         style,
         animation: { durMs: options.durationMs, ease: "easeInOut" as const },
       },
       {
         kind: "line" as const,
-        from: { line: { from: center, to: center }, lineWidth: options.size, stroke: options.color, opacity: 1 },
-        line: { from: center, to: left },
+        from: { line: { from: targetPoint, to: targetPoint }, lineWidth: options.size, stroke: options.color, opacity: 1 },
+        line: { from: targetPoint, to: left },
         style,
         animation: { durMs: options.durationMs, ease: "easeInOut" as const },
       },
       {
         kind: "line" as const,
-        from: { line: { from: center, to: center }, lineWidth: options.size, stroke: options.color, opacity: 1 },
-        line: { from: center, to: right },
+        from: { line: { from: targetPoint, to: targetPoint }, lineWidth: options.size, stroke: options.color, opacity: 1 },
+        line: { from: targetPoint, to: right },
         style,
         animation: { durMs: options.durationMs, ease: "easeInOut" as const },
       },
@@ -1686,6 +1725,7 @@ export function buildGfxArrowDrawScriptFromText(
     size: options.size ?? DEFAULT_GFX_ARROW_SIZE,
     length: options.length ?? DEFAULT_GFX_ARROW_LENGTH,
     durationMs: options.durationMs ?? DEFAULT_GFX_ARROW_DURATION_MS,
+    target: options.target ?? DEFAULT_GFX_ARROW_TARGET,
     from: options.from,
   };
   return buildGfxDrawScript(rects, buildArrowItems(rects, resolvedOptions), DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
@@ -1774,6 +1814,7 @@ export function parseGfxArrowOptions(
   let size = DEFAULT_GFX_ARROW_SIZE;
   let length = DEFAULT_GFX_ARROW_LENGTH;
   let durationMs = DEFAULT_GFX_ARROW_DURATION_MS;
+  let target = DEFAULT_GFX_ARROW_TARGET;
   let from: { x: number; y: number } | undefined;
 
   for (let index = 0; index < argv.length; index++) {
@@ -1821,6 +1862,26 @@ export function parseGfxArrowOptions(
       index--;
       continue;
     }
+    if (token === "--target") {
+      const raw = argv[index + 1];
+      if (
+        raw !== "center"
+        && raw !== "topleft"
+        && raw !== "topright"
+        && raw !== "bottomleft"
+        && raw !== "bottomright"
+        && raw !== "left"
+        && raw !== "top"
+        && raw !== "right"
+        && raw !== "bottom"
+      ) {
+        failUsage(usageTopic, "--target must be one of center, topleft, topright, bottomleft, bottomright, left, top, right, or bottom.");
+      }
+      target = raw;
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
     if (token === "--from") {
       const rawX = argv[index + 1];
       const rawY = argv[index + 2];
@@ -1835,7 +1896,7 @@ export function parseGfxArrowOptions(
     }
   }
 
-  return { color, size, length, durationMs, from };
+  return { color, size, length, durationMs, target, from };
 }
 
 async function attachDrawOverlay(payload: DrawScript): Promise<void> {

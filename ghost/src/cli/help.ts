@@ -95,7 +95,7 @@ const HELP_TOPICS: HelpTopic[] = [
       "gui gfx scan [--duration <milliseconds>] -",
       "gui gfx xray [--duration <milliseconds>] -",
       "gui gfx spotlight [--duration <milliseconds>] -",
-      "gui gfx arrow [--color <hex>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--from <x> <y>] -",
+      "gui gfx arrow [--color <hex>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--target <anchor>] [--from <x> <y>] -",
     ],
     examples: [
       "gui ax query --only --app Terminal '@@{Button[subrole~=DecrementPage]}' | gui gfx outline -",
@@ -110,7 +110,7 @@ const HELP_TOPICS: HelpTopic[] = [
       "`scan` resolves the same AX/VAT bounds but only drives the red scan-line overlay; it does not add outline/highlight rects.",
       "`spotlight` does not outline the target. It computes the union of all resolved bounds and dims the complement outside that union.",
       "`spotlight` accepts --duration and defaults to 1200ms, matching the other non-scan/xray overlay lifetimes.",
-      "`arrow` defaults to color `#FF3B30`, size `6`, length `100`, and duration `400`. Use --from <x> <y> to override the starting point and ignore --length.",
+      "`arrow` defaults to color `#FF3B30`, size `6`, length `100`, duration `400`, and target `center`. Use --target with center, topleft, topright, bottomleft, bottomright, left, top, right, or bottom to pick the anchor point on the resolved target rect. Use --from <x> <y> to override the starting point and ignore --length.",
       AX_TARGET_BEARING_JSON_TYPE_NOTE,
       "`scan` defaults to 500ms. `xray` defaults to 650ms. `spotlight` and `outline` default to 1200ms. `arrow` defaults to 400ms.",
       "Duplicate bounds are deduplicated before rendering so the same rect is not annotated twice.",
