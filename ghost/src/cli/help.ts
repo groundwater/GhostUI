@@ -77,7 +77,7 @@ const HELP_TOPICS: HelpTopic[] = [
     notes: [
       "Reads JSON from stdin, validates it, and stays attached to the daemon route until the draw script ends or the process is closed.",
       DRAW_SCRIPT_JSON_TYPE_NOTE,
-      "`gui ca highlight -` accepts one AX target-bearing payload on stdin and draws a rect from its bounds.",
+      "`gui ca highlight -` accepts one AX target-bearing payload on stdin and draws a rect from its bounds; VAT query payloads can expand into multiple rects by traversing all bounds-bearing descendants.",
       AX_TARGET_BEARING_JSON_TYPE_NOTE,
       "Without timeout, the overlay stays up until you terminate the attached client or the HTTP route closes.",
       "`gui ca highlight` defaults to a 1200ms overlay timeout; override it with --timeout <ms>.",
@@ -1814,7 +1814,7 @@ export function renderRootHelp(): string {
       "gui query '<query>'         Query the live UI tree (alias: gui q)",
       "gui vat <subcommand>        Mount/query virtual access tables",
       "gui ca script -             Render a JSON draw overlay from stdin",
-      "gui ca highlight -          Draw a rect highlight from piped AX target JSON",
+      "gui ca highlight -          Draw rect highlight(s) from piped AX/VAT JSON",
       "gui print <selector>...     Print one property (alias: gui p)",
       "gui img <query>             Screenshot a matched element",
       "gui rec <mode>              Capture a rect or cgWindowId",

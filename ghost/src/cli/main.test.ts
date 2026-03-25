@@ -1038,6 +1038,45 @@ describe("ca highlight AX bridge", () => {
     });
   });
 
+  test("fans out VAT highlights over every framed descendant in traversal order", () => {
+    const tree: PlainNode = {
+      _tag: "VATRoot",
+      _children: [
+        {
+          _tag: "Application",
+          title: "Terminal",
+          _children: [
+            {
+              _tag: "Window",
+              title: "One",
+              frame: { x: 40, y: 50, width: 300, height: 200 },
+            },
+            {
+              _tag: "Window",
+              title: "Two",
+              frame: { x: 400, y: 50, width: 320, height: 220 },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(buildAXHighlightDrawScriptFromText(formatVatQueryOutput(tree, "Window[frame]", false))).toEqual({
+      coordinateSpace: "screen",
+      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+      items: [
+        {
+          kind: "rect",
+          rect: { x: 40, y: 50, width: 300, height: 200 },
+        },
+        {
+          kind: "rect",
+          rect: { x: 400, y: 50, width: 320, height: 220 },
+        },
+      ],
+    });
+  });
+
   test("picks a nested bounds-bearing VAT descendant as the primary node", () => {
     const tree: PlainNode = {
       _tag: "VATRoot",
@@ -1118,7 +1157,64 @@ describe("ca highlight AX bridge", () => {
       items: [
         {
           kind: "rect",
+          rect: { x: 220, y: 24, width: 900, height: 720 },
+        },
+        {
+          kind: "rect",
           rect: { x: 894, y: 34, width: 31, height: 28 },
+        },
+      ],
+    });
+  });
+
+  test("deduplicates duplicate VAT descendant frames", () => {
+    const tree: PlainNode = {
+      _tag: "VATRoot",
+      _children: [
+        {
+          _tag: "Application",
+          title: "Terminal",
+          _children: [
+            {
+              _tag: "Window",
+              title: "One",
+              frame: { x: 40, y: 50, width: 300, height: 200 },
+            },
+            {
+              _tag: "WindowGroup",
+              _children: [
+                {
+                  _tag: "Window",
+                  title: "One duplicate",
+                  frame: { x: 40, y: 50, width: 300, height: 200 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(buildAXHighlightDrawScriptFromText(formatVatQueryOutput(tree, "Window[frame]", false))).toEqual({
+      coordinateSpace: "screen",
+      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+      items: [
+        {
+          kind: "rect",
+          rect: { x: 40, y: 50, width: 300, height: 200 },
+        },
+      ],
+    });
+  });
+
+  test("keeps AX payloads on the single-rect path", () => {
+    expect(buildAXHighlightDrawScriptFromText(JSON.stringify(target))).toEqual({
+      coordinateSpace: "screen",
+      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+      items: [
+        {
+          kind: "rect",
+          rect: { x: 100, y: 100, width: 80, height: 40 },
         },
       ],
     });

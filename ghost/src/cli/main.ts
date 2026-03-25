@@ -22,6 +22,7 @@ import {
   buildCLICompositionPayloadFromVatQueryResult,
   normalizeCLICompositionPayload,
   parseCLICompositionPayloadStream,
+  type CLICompositionRect,
   requireCLICompositionBounds,
   serializeCLICompositionPayload,
 } from "./payload.js";
@@ -1412,6 +1413,98 @@ function sameAXTarget(left: AXTarget, right: AXTarget): boolean {
 
 export const DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS = 1200;
 
+function normalizeHighlightRect(value: unknown): CLICompositionRect | null {
+  if (typeof value === "string") {
+    const match = value.trim().match(/^\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)$/);
+    if (!match) return null;
+    return {
+      x: Number(match[1]),
+      y: Number(match[2]),
+      width: Number(match[3]),
+      height: Number(match[4]),
+    };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const x = typeof record.x === "number" ? record.x : typeof record.x === "string" ? Number(record.x) : null;
+  const y = typeof record.y === "number" ? record.y : typeof record.y === "string" ? Number(record.y) : null;
+  const width = typeof record.width === "number" ? record.width : typeof record.width === "string" ? Number(record.width) : null;
+  const height = typeof record.height === "number" ? record.height : typeof record.height === "string" ? Number(record.height) : null;
+  if (
+    x === null || y === null || width === null || height === null
+    || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)
+  ) {
+    return null;
+  }
+  return { x, y, width, height };
+}
+
+function boundsFromHighlightNode(node: PlainNode): CLICompositionRect | null {
+  const record = node as PlainNode & Record<string, unknown>;
+  const frame = normalizeHighlightRect(record.frame) ?? normalizeHighlightRect(record._frame);
+  if (frame) return frame;
+  const x = typeof record.x === "number" ? record.x : typeof record.x === "string" ? Number(record.x) : null;
+  const y = typeof record.y === "number" ? record.y : typeof record.y === "string" ? Number(record.y) : null;
+  const width = typeof record.width === "number" ? record.width : typeof record.width === "string" ? Number(record.width) : null;
+  const height = typeof record.height === "number" ? record.height : typeof record.height === "string" ? Number(record.height) : null;
+  if (
+    x === null || y === null || width === null || height === null
+    || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)
+  ) {
+    return null;
+  }
+  return { x, y, width, height };
+}
+
+function describeHighlightNode(node: PlainNode): string {
+  const record = node as PlainNode & Record<string, unknown>;
+  const label = typeof record.title === "string"
+    ? record.title
+    : typeof record.label === "string"
+      ? record.label
+      : typeof record._displayName === "string"
+        ? record._displayName
+        : typeof record._label === "string"
+          ? record._label
+          : typeof record._id === "string"
+            ? record._id
+            : typeof record._text === "string"
+              ? record._text
+              : undefined;
+  return `${node._tag}${label ? ` "${label}"` : ""}`;
+}
+
+function collectVatHighlightRects(
+  nodes: PlainNode[] | null,
+): { rects: CLICompositionRect[]; firstNodeWithoutBounds: PlainNode | null } {
+  const rects: CLICompositionRect[] = [];
+  const seen = new Set<string>();
+  let firstNodeWithoutBounds: PlainNode | null = null;
+  const walk = (node: PlainNode) => {
+    if (node._tag !== "VATRoot") {
+      const rect = boundsFromHighlightNode(node);
+      if (rect && rect.width > 0 && rect.height > 0) {
+        const key = `${rect.x}:${rect.y}:${rect.width}:${rect.height}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          rects.push(rect);
+        }
+      } else {
+        firstNodeWithoutBounds ??= node;
+      }
+    }
+    for (const child of node._children ?? []) {
+      walk(child);
+    }
+  };
+  for (const node of nodes ?? []) {
+    walk(node);
+  }
+  return { rects, firstNodeWithoutBounds };
+}
+
 export function buildAXHighlightDrawScriptFromText(
   input: string,
   timeoutMs = DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
@@ -1424,17 +1517,31 @@ export function buildAXHighlightDrawScriptFromText(
     throw new Error(`gui ca highlight - expected exactly one JSON CLI payload on stdin, received ${payloads.length}`);
   }
 
-  const bounds = requireCLICompositionBounds(payloads[0], "gui ca highlight -");
+  const payload = payloads[0];
+  const items = payload.source === "vat.query"
+    ? (() => {
+      const { rects, firstNodeWithoutBounds } = collectVatHighlightRects(payload.nodes);
+      if (rects.length > 0) {
+        return rects.map((rect) => ({
+          kind: "rect" as const,
+          rect,
+        }));
+      }
+      if (firstNodeWithoutBounds) {
+        throw new Error(`gui ca highlight - ${describeHighlightNode(firstNodeWithoutBounds)} is missing bounds/frame coordinates`);
+      }
+      const bounds = requireCLICompositionBounds(payload, "gui ca highlight -");
+      return [{ kind: "rect" as const, rect: bounds }];
+    })()
+    : [{
+      kind: "rect" as const,
+      rect: requireCLICompositionBounds(payload, "gui ca highlight -"),
+    }];
 
   return {
     coordinateSpace: "screen",
     timeout: timeoutMs,
-    items: [
-      {
-        kind: "rect",
-        rect: bounds,
-      },
-    ],
+    items,
   };
 }
 
