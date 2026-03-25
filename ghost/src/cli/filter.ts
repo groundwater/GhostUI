@@ -630,6 +630,8 @@ function wrapInPath(node: PlainNode, path: PlainNode[]): PlainNode {
     const wrapper: PlainNode = cloneNodeSymbols({ _tag: ancestor._tag, _children: [result] } as PlainNode, ancestor);
     if (ancestor._id !== undefined) wrapper._id = ancestor._id as string;
     if (ancestor.id !== undefined) wrapper.id = ancestor.id;
+    if (ancestor.frame !== undefined) wrapper._frame = ancestor.frame;
+    if (ancestor._frame !== undefined) wrapper._frame = ancestor._frame;
     // Preserve display-name attrs so stripContainerAttrs can pick the best name
     if (ancestor.title !== undefined) wrapper.title = ancestor.title;
     if (ancestor.label !== undefined) wrapper.label = ancestor.label;
@@ -752,6 +754,8 @@ function stripContainerAttrs(node: PlainNode): PlainNode {
     return buildObscuredWindow(node);
   }
   const container: PlainNode = cloneNodeSymbols({ _tag: node._tag } as PlainNode, node);
+  if (node._frame !== undefined) container._frame = node._frame;
+  if (node.frame !== undefined) container._frame = node.frame;
 
   let displayName: string | undefined;
   for (const attr of containerDisplayNameAttrs(node._tag)) {

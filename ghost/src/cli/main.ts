@@ -1349,7 +1349,7 @@ async function main() {
                 ? resolveVatMountRequest(parsedMountArgs, await readStdinText("vat mount"))
                 : parsedMountArgs;
               const result = await postVatMount(mountArgs);
-              console.log(formatVatMountOutput(result, tty));
+              await writeStdoutText(`${formatVatMountOutput(result, tty)}\n`);
             } catch (error: unknown) {
               const mountError = formatVatMountError(error);
               if (mountError.kind === "runtime") {
@@ -1365,7 +1365,7 @@ async function main() {
             if (vatArgs.length !== 1) {
               failUsage("vat mounts");
             }
-            console.log(formatVatMountsOutput(await fetchVatMounts(), tty));
+            await writeStdoutText(`${formatVatMountsOutput(await fetchVatMounts(), tty)}\n`);
             break;
           }
 
@@ -1377,7 +1377,7 @@ async function main() {
               failUsage("vat unmount", error instanceof Error ? error.message : String(error));
             }
             try {
-              console.log(formatVatUnmountOutput(await deleteVatMount(path), tty));
+              await writeStdoutText(`${formatVatUnmountOutput(await deleteVatMount(path), tty)}\n`);
             } catch (error: unknown) {
               console.error(error instanceof Error ? error.message : String(error));
               process.exit(1);
@@ -1393,7 +1393,7 @@ async function main() {
               failUsage("vat policy", error instanceof Error ? error.message : String(error));
             }
             try {
-              console.log(formatVatPolicyOutput(await postVatPolicy(policyArgs.path, policyArgs.mountPolicy), tty));
+              await writeStdoutText(`${formatVatPolicyOutput(await postVatPolicy(policyArgs.path, policyArgs.mountPolicy), tty)}\n`);
             } catch (error: unknown) {
               console.error(error instanceof Error ? error.message : String(error));
               process.exit(1);
@@ -1411,7 +1411,7 @@ async function main() {
             const { tree } = await fetchVatQuery(queryStr);
             const rendered = formatVatQueryOutput(tree as PlainNode, queryStr, tty);
             if (rendered.length > 0) {
-              console.log(rendered);
+              await writeStdoutText(`${rendered}\n`);
             }
             break;
           }

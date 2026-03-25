@@ -190,32 +190,45 @@ function boundsFromPlainNode(node: PlainNode | null | undefined): CLIComposition
 
 function findPrimaryVatNode(root: PlainNode | null | undefined): PlainNode | null {
   if (!root) return null;
-  const stack: PlainNode[] = [root];
-  let fallback: PlainNode | null = null;
-  while (stack.length > 0) {
-    const node = stack.shift()!;
-    if (node._tag !== "VATRoot") {
-      const record = node as PlainNode & Record<string, unknown>;
-      if (boundsFromPlainNode(node)) return node;
-      if (
-        typeof record.title === "string"
-        || typeof record.label === "string"
-        || typeof record._displayName === "string"
-        || typeof record._label === "string"
-        || typeof record._id === "string"
-        || typeof record._text === "string"
-        || typeof record.bundleId === "string"
-        || typeof record.identifier === "string"
-      ) {
-        return node;
-      }
-      fallback ??= node;
-    }
+  function walk(node: PlainNode): { boundsNode: PlainNode | null; fallbackNode: PlainNode | null } {
+    let fallbackNode: PlainNode | null = null;
+
     for (const child of node._children ?? []) {
-      stack.push(child);
+      const childResult = walk(child);
+      if (childResult.boundsNode) {
+        return childResult;
+      }
+      fallbackNode ??= childResult.fallbackNode;
     }
+
+    if (node._tag !== "VATRoot") {
+      if (boundsFromPlainNode(node)) {
+        return { boundsNode: node, fallbackNode: fallbackNode ?? node };
+      }
+      const record = node as PlainNode & Record<string, unknown>;
+      if (
+        fallbackNode == null
+        && (
+          typeof record.title === "string"
+          || typeof record.label === "string"
+          || typeof record._displayName === "string"
+          || typeof record._label === "string"
+          || typeof record._id === "string"
+          || typeof record._text === "string"
+          || typeof record.bundleId === "string"
+          || typeof record.identifier === "string"
+        )
+      ) {
+        fallbackNode = node;
+      }
+      fallbackNode ??= node;
+    }
+
+    return { boundsNode: null, fallbackNode };
   }
-  return fallback;
+
+  const result = walk(root);
+  return result.boundsNode ?? result.fallbackNode;
 }
 
 export function isAXQueryMatch(value: unknown): value is AXQuerySerializedMatch {
@@ -419,8 +432,17 @@ function parseJSONLine(line: string, label: string): unknown {
   }
 }
 
+function stripLeadingTerminalNoise(text: string): string {
+  let result = text;
+  // Drop ANSI/OSC-style escape sequences that may be emitted by terminal wrappers.
+  result = result.replace(/^(?:\u001b\][^\u0007]*(?:\u0007|\u001b\\)|\u001b\[[0-?]*[ -/]*[@-~])+/u, "");
+  // Drop leading C0 control chars except JSON-significant whitespace.
+  result = result.replace(/^[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]+/u, "");
+  return result;
+}
+
 export function parseCLICompositionPayloadStream(text: string, streamLabel = "stdin"): CLICompositionPayload[] {
-  const trimmed = text.trim();
+  const trimmed = stripLeadingTerminalNoise(text).trim();
   if (!trimmed) return [];
   try {
     const parsed = JSON.parse(trimmed) as unknown;
@@ -434,7 +456,7 @@ export function parseCLICompositionPayloadStream(text: string, streamLabel = "st
     }
     return trimmed
       .split(/\r?\n/)
-      .map(line => line.trim())
+      .map(line => stripLeadingTerminalNoise(line).trim())
       .filter(Boolean)
       .map((line, index) => normalizeCLICompositionPayload(parseJSONLine(line, `${streamLabel} line ${index + 1}`), `${streamLabel} line ${index + 1}`));
   }

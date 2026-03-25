@@ -53,6 +53,8 @@ import {
   normalizeCLICompositionPayload,
   parseSingleCLICompositionPayload,
 } from "./payload.js";
+import { filterTree } from "./filter.js";
+import { parseQuery } from "./query.js";
 import { VatMountRequestError } from "./client.js";
 import type { PlainNode } from "./types.js";
 
@@ -460,6 +462,30 @@ describe("vat query rendering", () => {
       issues: [],
     }, "stdin payload")).toThrow("Invalid stdin payload.version: expected 1, received 999");
   });
+
+  test("accepts canonical payloads with leading terminal control noise", () => {
+    const payload = `\u0004\b\b${JSON.stringify({
+      type: "gui.payload",
+      version: 1,
+      source: "vat.query",
+      query: "Codex/*//Button#Commit { Image }",
+      tree: null,
+      nodes: null,
+      matchCount: 1,
+      node: { _tag: "Image", _frame: "(903,39,18,18)" },
+      target: null,
+      cursor: null,
+      axQueryMatch: null,
+      bounds: { x: 903, y: 39, width: 18, height: 18 },
+      point: { x: 912, y: 48 },
+      issues: [],
+    })}`;
+
+    expect(parseSingleCLICompositionPayload(payload, "stdin")).toMatchObject({
+      source: "vat.query",
+      bounds: { x: 903, y: 39, width: 18, height: 18 },
+    });
+  });
 });
 
 describe("vat unmount argument parsing", () => {
@@ -809,6 +835,52 @@ describe("ca highlight AX bridge", () => {
         {
           kind: "rect",
           rect: { x: 40, y: 50, width: 600, height: 300 },
+        },
+      ],
+    });
+  });
+
+  test("prefers a framed VAT descendant over a labeled ancestor without bounds", () => {
+    const tree: PlainNode = {
+      _tag: "VATRoot",
+      _children: [
+        {
+          _tag: "Codex",
+          _children: [
+            {
+              _tag: "Window",
+              title: "Codex",
+              frame: { x: 220, y: 24, width: 900, height: 720 },
+              _children: [
+                {
+                  _tag: "Button",
+                  label: "Commit",
+                  frame: { x: 894, y: 34, width: 31, height: 28 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const query = "Codex/*//@@Button#Commit";
+    const { nodes, matchCount } = filterTree(tree, parseQuery(query));
+    const payload = buildCLICompositionPayloadFromVatQueryResult(query, tree, nodes, matchCount);
+
+    expect(payload.node).toEqual({
+      _tag: "Button",
+      _displayName: "Commit",
+      _frame: { x: 894, y: 34, width: 31, height: 28 },
+    });
+    expect(payload.bounds).toEqual({ x: 894, y: 34, width: 31, height: 28 });
+    expect(buildAXHighlightDrawScriptFromText(JSON.stringify(payload))).toEqual({
+      coordinateSpace: "screen",
+      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+      items: [
+        {
+          kind: "rect",
+          rect: { x: 894, y: 34, width: 31, height: 28 },
         },
       ],
     });
