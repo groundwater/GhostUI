@@ -201,6 +201,24 @@ export async function fetchVatQuery(query: string): Promise<LiveQueryResult> {
   return res.json() as Promise<LiveQueryResult>;
 }
 
+export async function openVatWatchStream(
+  query: string,
+  options: { once?: boolean; filter?: Array<"added" | "removed" | "updated"> } = {},
+): Promise<Response> {
+  const params = new URLSearchParams({ q: query });
+  if (options.once) {
+    params.set("once", "1");
+  }
+  if (options.filter && options.filter.length > 0) {
+    params.set("filter", options.filter.join(","));
+  }
+  const res = await daemonFetch(`${BASE}/api/vat/watch?${params}`);
+  if (!res.ok) {
+    throw new Error(`/api/vat/watch failed (${res.status}): ${await readVatErrorBody(res)}`);
+  }
+  return res;
+}
+
 export async function fetchLogs(last = 20): Promise<string> {
   const params = new URLSearchParams({ last: String(last) });
   const res = await daemonFetch(`${BASE}/cli/log?${params}`);

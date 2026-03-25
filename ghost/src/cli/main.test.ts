@@ -1,4 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { rmSync } from "fs";
+import { fileURLToPath, pathToFileURL } from "url";
 import type { AXQueryMatch, AXQueryScopeInput, AXTarget } from "./ax.js";
 import { ACTOR_CLICK_PASSTHROUGH_DELAY_MS } from "../actors/protocol.js";
 import { axTargetFromPoint } from "../a11y/ax-target.js";
@@ -21,9 +23,12 @@ import {
   formatVatPolicyOutput,
   formatVatQueryOutput,
   formatVatUnmountOutput,
+  formatVatWatchEventText,
   extractVatOutputMode,
   resolveVatOutputTTY,
   emitPassthroughStdout,
+  parseVatWatchArgs,
+  parseVatWatchEventLine,
   queryVatTree,
   parseRecRectArgFromPayloadText,
   parseCGDragPoints,
@@ -44,6 +49,7 @@ import {
   resolveAXQueryAppFilterScope,
   resolveCommandAlias,
   resolveCRDTSubcommandAlias,
+  summarizeVatWatchChanges,
   shouldEmitPassthroughStdout,
   formatVatMountError,
 } from "./main.js";
@@ -55,8 +61,72 @@ import {
 } from "./payload.js";
 import { filterTree } from "./filter.js";
 import { parseQuery } from "./query.js";
-import { VatMountRequestError } from "./client.js";
+import { __setDaemonAuthSecretReaderForTests, resetDaemonAuthSecretCache, VatMountRequestError } from "./client.js";
 import type { PlainNode } from "./types.js";
+
+type TailVatWatchStream = (
+  watchArgs: { query: string; once: boolean; filter?: Array<"added" | "removed" | "updated"> },
+  tty: boolean,
+  writer?: (chunk: string) => Promise<void>,
+  stderr?: Pick<NodeJS.WriteStream, "write">,
+  reconnectDelayMs?: number,
+) => Promise<void>;
+
+function streamFromChunks(chunks: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+      }
+      controller.close();
+    },
+  });
+}
+
+async function loadTailVatWatchStreamForTests(): Promise<TailVatWatchStream> {
+  const sourceUrl = new URL("./main.ts", import.meta.url);
+  const tempPath = fileURLToPath(
+    new URL(`./.main-tail-watch-${Date.now()}-${Math.random().toString(16).slice(2)}.ts`, import.meta.url),
+  );
+  const source = await Bun.file(sourceUrl).text();
+  await Bun.write(tempPath, `${source}\nexport { tailVatWatchStream };\n`);
+
+  try {
+    const imported = await import(`${pathToFileURL(tempPath).href}?t=${Date.now()}`) as {
+      tailVatWatchStream: TailVatWatchStream;
+    };
+    return imported.tailVatWatchStream;
+  } finally {
+    rmSync(tempPath);
+  }
+}
+
+async function withMockedFetchSequence<T>(
+  responses: Response[],
+  run: () => Promise<T>,
+): Promise<T> {
+  const originalFetch = globalThis.fetch;
+  let index = 0;
+  globalThis.fetch = (async () => {
+    const response = responses[index] ?? new Response("unexpected fetch", { status: 500 });
+    index += 1;
+    return response;
+  }) as typeof fetch;
+
+  try {
+    __setDaemonAuthSecretReaderForTests(async () => null);
+    resetDaemonAuthSecretCache();
+    return await run();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+afterEach(() => {
+  __setDaemonAuthSecretReaderForTests();
+  resetDaemonAuthSecretCache();
+});
 
 describe("command alias resolution", () => {
   test("maps the top-level q alias to query", () => {
@@ -313,6 +383,26 @@ describe("vat query argument parsing", () => {
   });
 });
 
+describe("vat watch argument parsing", () => {
+  test("requires a query string", () => {
+    expect(() => parseVatWatchArgs([])).toThrow("gui vat query requires a query");
+  });
+
+  test("parses --once and comma-separated change filters", () => {
+    expect(parseVatWatchArgs(["--once", "--filter", "updated,removed", "Window", "{", "Button", "}"])).toEqual({
+      query: "Window { Button }",
+      once: true,
+      filter: ["updated", "removed"],
+    });
+  });
+
+  test("rejects invalid filter kinds", () => {
+    expect(() => parseVatWatchArgs(["--filter", "bogus", "Window"])).toThrow(
+      "gui vat watch --filter kinds must be added, removed, or updated",
+    );
+  });
+});
+
 describe("vat policy argument parsing", () => {
   test("parses always, disabled, and auto policies", () => {
     expect(parseVatPolicyArgs(["/demo", "always"])).toEqual({
@@ -485,6 +575,144 @@ describe("vat query rendering", () => {
       source: "vat.query",
       bounds: { x: 903, y: 39, width: 18, height: 18 },
     });
+  });
+});
+
+describe("vat watch rendering", () => {
+  test("parses ndjson watch payloads and renders a compact text summary", () => {
+    const line = JSON.stringify({
+      ...buildCLICompositionPayloadFromVatQueryResult(
+        "Window { Button }",
+        {
+          _tag: "VATRoot",
+          _children: [
+            {
+              _tag: "demo",
+              _children: [
+                { _tag: "Window", _children: [{ _tag: "Button", _text: "Save" }] },
+              ],
+            },
+          ],
+        },
+        [
+          {
+            _tag: "demo",
+            _children: [
+              { _tag: "Window", _children: [{ _tag: "Button", _text: "Save" }] },
+            ],
+          },
+        ],
+        1,
+      ),
+      source: "vat.watch",
+      changes: [
+        {
+          kind: "updated",
+          index: 0,
+          previous: { _tag: "demo", _children: [{ _tag: "Window", title: "Old" }] },
+          current: { _tag: "demo", _children: [{ _tag: "Window", title: "New" }] },
+        },
+      ],
+      changeSummary: { added: 0, removed: 0, updated: 1, total: 1 },
+    });
+
+    const event = parseVatWatchEventLine(line);
+    expect(event.payload.source).toBe("vat.watch");
+    expect(event.summary).toEqual({ added: 0, removed: 0, updated: 1, total: 1 });
+    expect(event.changes[0]).toMatchObject({ kind: "updated", index: 0 });
+    expect(formatVatWatchEventText(event)).toContain("changes: 1 updated");
+    expect(formatVatWatchEventText(event)).toContain("Window");
+    expect(formatVatWatchEventText(event)).toContain("Button");
+  });
+
+  test("summarizes change counts when the payload omits a summary", () => {
+    expect(summarizeVatWatchChanges([
+      { kind: "added", index: 0, previous: null, current: { _tag: "A" } },
+      { kind: "updated", index: 1, previous: { _tag: "B" }, current: { _tag: "C" } },
+    ])).toEqual({ added: 1, removed: 0, updated: 1, total: 2 });
+  });
+});
+
+describe("vat watch stream framing", () => {
+  test("joins split NDJSON across reads before emitting", async () => {
+    const tailVatWatchStream = await loadTailVatWatchStreamForTests();
+    const outputs: string[] = [];
+    const line = JSON.stringify({ source: "vat.watch", seq: 1 });
+
+    await withMockedFetchSequence(
+      [new Response(streamFromChunks([line.slice(0, 12), `${line.slice(12)}\n`]))],
+      async () => {
+        await tailVatWatchStream(
+          { query: "Window", once: true },
+          false,
+          async (chunk) => {
+            outputs.push(chunk);
+          },
+        );
+      },
+    );
+
+    expect(outputs).toEqual([`${line}\n`]);
+  });
+
+  test("emits multiple events from one chunk before reconnect failure", async () => {
+    const tailVatWatchStream = await loadTailVatWatchStreamForTests();
+    const outputs: string[] = [];
+    const stderrChunks: string[] = [];
+    const first = JSON.stringify({ source: "vat.watch", seq: 1 });
+    const second = JSON.stringify({ source: "vat.watch", seq: 2 });
+
+    await withMockedFetchSequence(
+      [
+        new Response(streamFromChunks([`${first}\n${second}\n`])),
+        new Response(JSON.stringify({ error: "boom" }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        }),
+      ],
+      async () => {
+        await expect(
+          tailVatWatchStream(
+            { query: "Window", once: false },
+            false,
+            async (chunk) => {
+              outputs.push(chunk);
+            },
+            {
+              write(chunk) {
+                stderrChunks.push(String(chunk));
+                return true;
+              },
+            },
+            0,
+          ),
+        ).rejects.toThrow("/api/vat/watch failed (500): boom");
+      },
+    );
+
+    expect(outputs).toEqual([`${first}\n`, `${second}\n`]);
+    expect(stderrChunks).toEqual(["vat watch disconnected; reconnecting...\n"]);
+  });
+
+  test("flushes a trailing partial line when the stream closes", async () => {
+    const tailVatWatchStream = await loadTailVatWatchStreamForTests();
+    const outputs: string[] = [];
+    const line = JSON.stringify({ source: "vat.watch", seq: 3 });
+
+    await withMockedFetchSequence(
+      [new Response(streamFromChunks([line]))],
+      async () => {
+        await tailVatWatchStream(
+          { query: "Window", once: true },
+          false,
+          async (chunk) => {
+            outputs.push(chunk);
+          },
+        );
+      },
+    );
+
+    expect(outputs).toEqual([`${line}\n`]);
   });
 });
 

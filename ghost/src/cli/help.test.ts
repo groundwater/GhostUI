@@ -41,6 +41,7 @@ describe("cli help rendering", () => {
     expect(help).toContain("gui help vat policy");
     expect(help).toContain("gui help vat unmount");
     expect(help).toContain("gui help vat query");
+    expect(help).toContain("gui help vat watch");
     expect(help).toContain("gui skill claude");
     expect(help).toContain("gui skill codex");
   });
@@ -53,6 +54,7 @@ describe("cli help rendering", () => {
     expect(help).toContain("gui vat policy /Some/Path always|disabled|auto <never|seconds>");
     expect(help).toContain("gui vat unmount /Some/Path");
     expect(help).toContain("gui vat query '<query>'");
+    expect(help).toContain("gui vat watch [--once] [--filter <kinds>] '<query>'");
     expect(help).toContain("gui vat mount /demo fixed hello world");
     expect(help).toContain("gui vat mount /demo a11y 'Application#com.apple.TextEdit { Window }'");
     expect(help).toContain("gui vat mount /demo live 'Application#com.apple.TextEdit { Window }'");
@@ -62,6 +64,7 @@ describe("cli help rendering", () => {
     expect(help).toContain("The mounted path becomes the wrapper tag in the printed GUIML.");
     expect(help).toContain("VAT mounts are persisted in the daemon-owned mount table.");
     expect(help).toContain("may lazily activate auto mounts");
+    expect(help).toContain("gui vat watch refetches VAT query results");
   });
 
   test("vat mount help documents the mount entrypoint", () => {
@@ -105,6 +108,15 @@ describe("cli help rendering", () => {
     expect(help).toContain("Introspection queries like [*] and [**] are supported here.");
   });
 
+  test("vat watch help documents streaming behavior and filter kinds", () => {
+    const help = renderHelpTopic("vat watch");
+
+    expect(help).toContain("gui vat watch [--once] [--filter <kinds>] '<query>'");
+    expect(help).toContain("--filter accepts a comma-separated subset of added, removed, updated.");
+    expect(help).toContain("no initial payload");
+    expect(help).toContain("source vat.watch");
+  });
+
   test("ca help reflects the supported primitive kinds", () => {
     const help = renderHelpTopic("ca");
 
@@ -144,6 +156,7 @@ describe("cli help rendering", () => {
     expect(findHelpTopic("vat policy")?.id).toBe("vat policy");
     expect(findHelpTopic("vat unmount")?.id).toBe("vat unmount");
     expect(findHelpTopic("vat query")?.id).toBe("vat query");
+    expect(findHelpTopic("vat watch")?.id).toBe("vat watch");
     expect(findHelpTopic("mount")).toBeUndefined();
 
     expect(findHelpTopic("ax q")).toBeUndefined();

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { fetchTree, fetchCRDTTree, fetchLiveQuery, fetchElementScreenshot, fetchFrameScreenshot, postScanOverlay, postDrawOverlay, postKeyboardInput, switchApp, focusWindow, dragWindow, fetchFilteredCGWindows, findCGWindowAt, fetchRawWorkspaceApps, fetchRawWorkspaceFrontmost, fetchLogs, openLogStream, fetchScreen, fetchLeases, openEventStream, fetchPbRead, postPbWrite, fetchPbTypes, postPbClear, fetchDisplayList, fetchDisplayMain, fetchDisplayById, fetchDefaultsRead, postDefaultsWrite, fetchDefaultsDomains, killActor, listActors, postRecFilmstrip, postRecImage, runActor, spawnActor, postCgMove, postCgClick, postCgDoubleClick, postCgDrag, postCgScroll, postCgKeyDown, postCgKeyUp, postCgModDown, postCgModUp, fetchCgMousePos, fetchCgMouseState, fetchVatMounts, fetchVatQuery, fetchVatTree, postVatMount, deleteVatMount, postVatPolicy, VatMountRequestError } from "./client.js";
+import { fetchTree, fetchCRDTTree, fetchLiveQuery, fetchElementScreenshot, fetchFrameScreenshot, postScanOverlay, postDrawOverlay, postKeyboardInput, switchApp, focusWindow, dragWindow, fetchFilteredCGWindows, findCGWindowAt, fetchRawWorkspaceApps, fetchRawWorkspaceFrontmost, fetchLogs, openLogStream, fetchScreen, fetchLeases, openEventStream, fetchPbRead, postPbWrite, fetchPbTypes, postPbClear, fetchDisplayList, fetchDisplayMain, fetchDisplayById, fetchDefaultsRead, postDefaultsWrite, fetchDefaultsDomains, killActor, listActors, postRecFilmstrip, postRecImage, runActor, spawnActor, postCgMove, postCgClick, postCgDoubleClick, postCgDrag, postCgScroll, postCgKeyDown, postCgKeyUp, postCgModDown, postCgModUp, fetchCgMousePos, fetchCgMouseState, fetchVatMounts, fetchVatQuery, fetchVatTree, openVatWatchStream, postVatMount, deleteVatMount, postVatPolicy, VatMountRequestError } from "./client.js";
 import { parseQuery } from "./query.js";
 import { filterTree, bfsFirst, collectObscuredApps, findMatchedNode, OBSCURED_THRESHOLD, matchTree } from "./filter.js";
 import { parseSelector, matchChain } from "./print.js";
@@ -14,16 +14,18 @@ import { fetchRawAXTree, fetchAXCursor, fetchAXQueryMatches, axClickTarget, axPr
 import type { AXNode, AXCursor, AXEventFilter, AXTarget, AXQueryMatch, AXQueryScopeInput, AXScopePayload } from "./ax.js";
 import { axNodeAccessor } from "./accessor.js";
 import type { PlainNode } from "./types.js";
-import { tailLogStream } from "./log-stream.js";
+import { isRetryableLogStreamError, tailLogStream } from "./log-stream.js";
 import { findHelpTopic, findNearestHelpTopic, renderHelpIndex, renderHelpTopic, renderRootHelp, renderUnknownHelpTopic, renderUsage } from "./help.js";
 import { findSkillTarget, renderSkill, renderSkillList } from "./skills.js";
 import {
   buildCLICompositionPayloadFromAXQueryMatch,
   buildCLICompositionPayloadFromVatQueryResult,
+  normalizeCLICompositionPayload,
   parseCLICompositionPayloadStream,
   requireCLICompositionBounds,
   serializeCLICompositionPayload,
 } from "./payload.js";
+import type { CLICompositionPayload } from "./payload.js";
 import { normalizeDrawScriptText } from "../overlay/draw.js";
 import type { DrawScript } from "../overlay/draw.js";
 import { waitForDrawOverlayAttachment } from "./draw-stream.js";
@@ -338,6 +340,34 @@ export interface VatPolicyCLIArgs {
   mountPolicy: VatMountPolicy;
 }
 
+export type VatWatchChangeKind = "added" | "removed" | "updated";
+
+export interface VatWatchCLIArgs {
+  query: string;
+  once: boolean;
+  filter?: VatWatchChangeKind[];
+}
+
+export interface VatWatchChange {
+  kind: VatWatchChangeKind;
+  index: number;
+  previous: PlainNode | null;
+  current: PlainNode | null;
+}
+
+export interface VatWatchChangeSummary {
+  added: number;
+  removed: number;
+  updated: number;
+  total: number;
+}
+
+export interface VatWatchEvent {
+  payload: CLICompositionPayload;
+  changes: VatWatchChange[];
+  summary: VatWatchChangeSummary;
+}
+
 export function parseVatMountArgs(argv: string[], usageLabel = "vat mount"): VatMountCLIArgs {
   if (argv.length < 2) {
     throw new Error(`gui ${usageLabel} requires a path and a driver`);
@@ -360,6 +390,64 @@ export function parseVatQueryArgs(argv: string[]): string {
     throw new Error("gui vat query requires a query");
   }
   return query;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isPlainNodeLike(value: unknown): value is PlainNode {
+  return isRecord(value) && typeof value._tag === "string";
+}
+
+function parseVatWatchFilterKinds(value: string): VatWatchChangeKind[] {
+  const kinds = value
+    .split(",")
+    .map((kind) => kind.trim())
+    .filter(Boolean);
+  if (kinds.length === 0) {
+    throw new Error("gui vat watch --filter requires one or more comma-separated kinds");
+  }
+  const normalized: VatWatchChangeKind[] = [];
+  for (const kind of kinds) {
+    if (kind !== "added" && kind !== "removed" && kind !== "updated") {
+      throw new Error("gui vat watch --filter kinds must be added, removed, or updated");
+    }
+    if (!normalized.includes(kind)) {
+      normalized.push(kind);
+    }
+  }
+  return normalized;
+}
+
+export function parseVatWatchArgs(argv: string[]): VatWatchCLIArgs {
+  const args = [...argv];
+  let once = false;
+  let filter: VatWatchChangeKind[] | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === "--once") {
+      once = true;
+      args.splice(index, 1);
+      index -= 1;
+      continue;
+    }
+    if (args[index] === "--filter") {
+      const value = args[index + 1];
+      if (!value) {
+        throw new Error("gui vat watch --filter requires one or more comma-separated kinds");
+      }
+      filter = parseVatWatchFilterKinds(value);
+      args.splice(index, 2);
+      index -= 1;
+    }
+  }
+
+  return {
+    query: parseVatQueryArgs(args),
+    once,
+    ...(filter ? { filter } : {}),
+  };
 }
 
 export function queryVatTree(tree: PlainNode, queryStr: string): VatQueryResult {
@@ -387,6 +475,109 @@ export function formatVatQueryOutput(tree: PlainNode, queryStr: string, tty = pr
     buildCLICompositionPayloadFromVatQueryResult(queryStr, result.tree, result.nodes, result.matchCount),
     false,
   );
+}
+
+export function summarizeVatWatchChanges(changes: VatWatchChange[]): VatWatchChangeSummary {
+  const summary: VatWatchChangeSummary = {
+    added: 0,
+    removed: 0,
+    updated: 0,
+    total: changes.length,
+  };
+  for (const change of changes) {
+    summary[change.kind] += 1;
+  }
+  return summary;
+}
+
+export function parseVatWatchEventLine(line: string): VatWatchEvent {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(line) as unknown;
+  } catch {
+    throw new Error("gui vat watch expected NDJSON payloads");
+  }
+  if (!isRecord(raw)) {
+    throw new Error("gui vat watch expected object payloads");
+  }
+  const payload = normalizeCLICompositionPayload(raw, "vat watch payload");
+  if (payload.source !== "vat.watch") {
+    throw new Error(`gui vat watch expected source vat.watch, received ${payload.source}`);
+  }
+  const changesRaw = raw.changes;
+  if (!Array.isArray(changesRaw)) {
+    throw new Error("gui vat watch payload is missing changes");
+  }
+  const changes: VatWatchChange[] = changesRaw.map((change, index) => {
+    if (!isRecord(change)) {
+      throw new Error(`gui vat watch payload changes[${index}] is invalid`);
+    }
+    const kind = change.kind;
+    if (kind !== "added" && kind !== "removed" && kind !== "updated") {
+      throw new Error(`gui vat watch payload changes[${index}].kind is invalid`);
+    }
+    if (!Number.isInteger(change.index) || Number(change.index) < 0) {
+      throw new Error(`gui vat watch payload changes[${index}].index is invalid`);
+    }
+    const previous = change.previous == null
+      ? null
+      : isPlainNodeLike(change.previous)
+        ? change.previous
+        : (() => { throw new Error(`gui vat watch payload changes[${index}].previous is invalid`); })();
+    const current = change.current == null
+      ? null
+      : isPlainNodeLike(change.current)
+        ? change.current
+        : (() => { throw new Error(`gui vat watch payload changes[${index}].current is invalid`); })();
+    return {
+      kind,
+      index: Number(change.index),
+      previous,
+      current,
+    };
+  });
+
+  const summaryRaw = raw.changeSummary;
+  const summary = isRecord(summaryRaw)
+    && Number.isFinite(summaryRaw.added)
+    && Number.isFinite(summaryRaw.removed)
+    && Number.isFinite(summaryRaw.updated)
+    && Number.isFinite(summaryRaw.total)
+    ? {
+        added: Number(summaryRaw.added),
+        removed: Number(summaryRaw.removed),
+        updated: Number(summaryRaw.updated),
+        total: Number(summaryRaw.total),
+      }
+    : summarizeVatWatchChanges(changes);
+
+  return { payload, changes, summary };
+}
+
+export function formatVatWatchSummary(summary: VatWatchChangeSummary): string {
+  if (summary.total === 0) {
+    return "changes: none";
+  }
+  const parts: string[] = [];
+  if (summary.added > 0) {
+    parts.push(`${summary.added} added`);
+  }
+  if (summary.removed > 0) {
+    parts.push(`${summary.removed} removed`);
+  }
+  if (summary.updated > 0) {
+    parts.push(`${summary.updated} updated`);
+  }
+  return `changes: ${parts.join(", ")}`;
+}
+
+export function formatVatWatchEventText(event: VatWatchEvent): string {
+  const query = event.payload.query;
+  const tree = event.payload.tree;
+  if (!query || !tree) {
+    throw new Error("gui vat watch payload is missing query/tree");
+  }
+  return `${formatVatWatchSummary(event.summary)}\n${renderVatQueryResult(tree, query)}`;
 }
 
 export function formatVatMountOutput(result: VatMountResponse, tty = process.stdout.isTTY): string {
@@ -701,6 +892,87 @@ async function writeStdoutText(text: string): Promise<void> {
     }
     stdout.once("drain", onDrain);
   });
+}
+
+function isRetryableVatWatchError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return isRetryableLogStreamError(err) || message.toLowerCase().includes("vat watch stream ended unexpectedly");
+}
+
+async function tailVatWatchStream(
+  watchArgs: VatWatchCLIArgs,
+  tty: boolean,
+  writer: (chunk: string) => Promise<void> = writeStdoutText,
+  stderr: Pick<NodeJS.WriteStream, "write"> = process.stderr,
+  reconnectDelayMs = 500,
+): Promise<void> {
+  let announcedReconnect = false;
+
+  while (true) {
+    try {
+      const res = await openVatWatchStream(watchArgs.query, {
+        once: watchArgs.once,
+        filter: watchArgs.filter,
+      });
+      announcedReconnect = false;
+
+      if (!res.body) {
+        throw new Error("vat watch stream missing response body");
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let receivedPayload = false;
+
+      const emitLine = async (line: string): Promise<void> => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          return;
+        }
+        receivedPayload = true;
+        if (!tty) {
+          await writer(trimmed + "\n");
+          return;
+        }
+        await writer(`${formatVatWatchEventText(parseVatWatchEventLine(trimmed))}\n`);
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          if (buffer.trim().length > 0) {
+            await emitLine(buffer);
+            buffer = "";
+          }
+          if (watchArgs.once && receivedPayload) {
+            return;
+          }
+          throw new Error("vat watch stream ended unexpectedly");
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          await emitLine(line);
+          if (watchArgs.once && receivedPayload) {
+            return;
+          }
+        }
+      }
+    } catch (err: unknown) {
+      if (!isRetryableVatWatchError(err)) {
+        throw err;
+      }
+
+      if (!announcedReconnect) {
+        stderr.write("vat watch disconnected; reconnecting...\n");
+        announcedReconnect = true;
+      }
+
+      await Bun.sleep(reconnectDelayMs);
+    }
+  }
 }
 
 type AXQueryCardinality = "first" | "only" | "all" | "each";
@@ -1412,6 +1684,22 @@ async function main() {
             const rendered = formatVatQueryOutput(tree as PlainNode, queryStr, tty);
             if (rendered.length > 0) {
               await writeStdoutText(`${rendered}\n`);
+            }
+            break;
+          }
+
+          case "watch": {
+            let watchArgs: VatWatchCLIArgs;
+            try {
+              watchArgs = parseVatWatchArgs(vatArgs.slice(1));
+            } catch (error: unknown) {
+              failUsage("vat watch", error instanceof Error ? error.message : String(error));
+            }
+            try {
+              await tailVatWatchStream(watchArgs, tty);
+            } catch (error: unknown) {
+              console.error(error instanceof Error ? error.message : String(error));
+              process.exit(1);
             }
             break;
           }

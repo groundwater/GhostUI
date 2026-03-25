@@ -1097,4 +1097,236 @@ describe("VAT routes", () => {
     });
     expect(registry.list()[0]?.active).toBe(false);
   });
+
+  test("vat watch stays quiet until a qualifying change and emits vat.watch ndjson payloads", async () => {
+    let snapshotVersion = 0;
+    const registry = createVatRegistry({
+      drivers: new Map([
+        [
+          "watched",
+          () => ({
+            tree: {
+              _tag: "Terminal",
+              _children: [
+                {
+                  _tag: "Window",
+                  title: snapshotVersion === 0 ? "Shell" : "Shell updated",
+                  _children: [
+                    {
+                      _tag: "Button",
+                      title: snapshotVersion === 0 ? "Run" : "Run updated",
+                    },
+                  ],
+                },
+              ],
+            },
+            observedPids: [101],
+            observedBundleIds: ["com.apple.Terminal"],
+          }),
+        ],
+      ]),
+    });
+
+    await handleVAT(
+      new Request("http://localhost:7861/api/vat/mount", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: "/Terminal",
+          driver: "watched",
+          args: [],
+          mountPolicy: { kind: "always" },
+        }),
+      }),
+      registry,
+    );
+
+    const encoder = new TextEncoder();
+    const watchRes = await handleVAT(
+      new Request("http://localhost:7861/api/vat/watch?q=Window&once=1"),
+      registry,
+      {
+        openTriggerStream: async () => new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(JSON.stringify({
+              type: "window-updated",
+              pid: 101,
+              bundleId: "com.apple.Terminal",
+            }) + "\n"));
+            snapshotVersion = 1;
+            controller.enqueue(encoder.encode(JSON.stringify({
+              type: "window-updated",
+              pid: 101,
+              bundleId: "com.apple.Terminal",
+            }) + "\n"));
+            controller.close();
+          },
+        })),
+      },
+    );
+
+    expect(watchRes).not.toBeNull();
+    expect((watchRes as Response).status).toBe(200);
+    const lines = (await (watchRes as Response).text()).trim().split("\n");
+    expect(lines).toHaveLength(1);
+
+    const payload = JSON.parse(lines[0]) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      type: "gui.payload",
+      version: 1,
+      source: "vat.watch",
+      query: "Window",
+      matchCount: 1,
+      changeSummary: { added: 0, removed: 0, updated: 1, total: 1 },
+    });
+    expect(payload).toHaveProperty("changes");
+    expect((payload.changes as Array<Record<string, unknown>>)[0]).toMatchObject({
+      kind: "updated",
+      index: 0,
+    });
+    expect((payload.tree as Record<string, unknown>)._children).toBeDefined();
+    expect(((payload.tree as { _children?: Array<{ _children?: Array<{ title?: string }> }> })._children?.[0]?._children?.[0]?.title))
+      .toBe("Shell updated");
+  });
+
+  test("vat watch uses identity-aware diff so repeated-tag front insertion does not misclassify later nodes", async () => {
+    let snapshotVersion = 0;
+    const registry = createVatRegistry({
+      drivers: new Map([
+        [
+          "watched",
+          () => ({
+            tree: {
+              _tag: "App",
+              _children: snapshotVersion === 0
+                ? [
+                    { _tag: "Window", title: "Main" },
+                    { _tag: "Window", title: "Settings" },
+                  ]
+                : [
+                    { _tag: "Window", title: "New" },
+                    { _tag: "Window", title: "Main" },
+                    { _tag: "Window", title: "Settings" },
+                  ],
+            },
+            observedPids: [200],
+          }),
+        ],
+      ]),
+    });
+
+    await handleVAT(
+      new Request("http://localhost:7861/api/vat/mount", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: "/App",
+          driver: "watched",
+          args: [],
+          mountPolicy: { kind: "always" },
+        }),
+      }),
+      registry,
+    );
+
+    const encoder = new TextEncoder();
+    const watchRes = await handleVAT(
+      new Request("http://localhost:7861/api/vat/watch?q=Window&once=1"),
+      registry,
+      {
+        openTriggerStream: async () => new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            snapshotVersion = 1;
+            controller.enqueue(encoder.encode(JSON.stringify({
+              type: "window-created",
+              pid: 200,
+            }) + "\n"));
+            controller.close();
+          },
+        })),
+      },
+    );
+
+    expect(watchRes).not.toBeNull();
+    expect((watchRes as Response).status).toBe(200);
+    const lines = (await (watchRes as Response).text()).trim().split("\n");
+    expect(lines).toHaveLength(1);
+
+    const payload = JSON.parse(lines[0]) as Record<string, unknown>;
+    const changes = payload.changes as Array<{ kind: string; index: number }>;
+    const summary = payload.changeSummary as { added: number; removed: number; updated: number; total: number };
+    expect(summary).toEqual({ added: 1, removed: 0, updated: 0, total: 1 });
+    expect(changes).toHaveLength(1);
+    expect(changes[0].kind).toBe("added");
+    expect(changes[0].index).toBe(0);
+  });
+
+  test("vat watch filter emits only matching change kinds in payload and summary", async () => {
+    let snapshotVersion = 0;
+    const registry = createVatRegistry({
+      drivers: new Map([
+        [
+          "watched",
+          () => ({
+            tree: {
+              _tag: "App",
+              _children: snapshotVersion === 0
+                ? [
+                    { _tag: "Window", _id: "Main", title: "v1" },
+                  ]
+                : [
+                    { _tag: "Window", _id: "Main", title: "v2" },
+                    { _tag: "Window", _id: "New", title: "Fresh" },
+                  ],
+            },
+            observedPids: [300],
+          }),
+        ],
+      ]),
+    });
+
+    await handleVAT(
+      new Request("http://localhost:7861/api/vat/mount", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: "/App",
+          driver: "watched",
+          args: [],
+          mountPolicy: { kind: "always" },
+        }),
+      }),
+      registry,
+    );
+
+    const encoder = new TextEncoder();
+    const watchRes = await handleVAT(
+      new Request("http://localhost:7861/api/vat/watch?q=Window&filter=updated&once=1"),
+      registry,
+      {
+        openTriggerStream: async () => new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            snapshotVersion = 1;
+            controller.enqueue(encoder.encode(JSON.stringify({
+              type: "window-created",
+              pid: 300,
+            }) + "\n"));
+            controller.close();
+          },
+        })),
+      },
+    );
+
+    expect(watchRes).not.toBeNull();
+    expect((watchRes as Response).status).toBe(200);
+    const lines = (await (watchRes as Response).text()).trim().split("\n");
+    expect(lines).toHaveLength(1);
+
+    const payload = JSON.parse(lines[0]) as Record<string, unknown>;
+    const changes = payload.changes as Array<{ kind: string; index: number }>;
+    const summary = payload.changeSummary as { added: number; removed: number; updated: number; total: number };
+    expect(summary).toEqual({ added: 0, removed: 0, updated: 1, total: 1 });
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ kind: "updated", index: 0 });
+  });
 });

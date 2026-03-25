@@ -479,6 +479,7 @@ const HELP_TOPICS: HelpTopic[] = [
       "gui vat policy /Some/Path always|disabled|auto <never|seconds>",
       "gui vat unmount /Some/Path",
       "gui vat query '<query>'",
+      "gui vat watch [--once] [--filter <kinds>] '<query>'",
     ],
     examples: [
       "gui vat mount /demo fixed hello world",
@@ -487,6 +488,7 @@ const HELP_TOPICS: HelpTopic[] = [
       "gui vat policy /demo auto 30",
       "gui vat unmount /demo",
       "gui vat query 'Application { Window }'",
+      "gui vat watch --filter updated 'Window { Button }'",
     ],
     notes: [
       "The fixed driver remains a smoke test.",
@@ -495,9 +497,10 @@ const HELP_TOPICS: HelpTopic[] = [
       "The mounted path becomes the wrapper tag in the printed GUIML.",
       "VAT mounts are persisted in the daemon-owned mount table.",
       "gui vat query runs the query over the union of active VAT trees and may lazily activate auto mounts.",
+      "gui vat watch refetches VAT query results when AX observer activity suggests a touched VAT mount may have changed.",
       "Use --json or --text before the VAT subcommand to force machine-readable or human-readable output; pipe stdout to default to JSON.",
     ],
-    related: ["vat mount", "vat mounts", "vat policy", "vat unmount", "vat query", "output"],
+    related: ["vat mount", "vat mounts", "vat policy", "vat unmount", "vat query", "vat watch", "output"],
   },
   {
     id: "vat mount",
@@ -582,7 +585,24 @@ const HELP_TOPICS: HelpTopic[] = [
       "Queries run against the union root built from every mounted VAT tree.",
       "Introspection queries like [*] and [**] are supported here.",
     ],
-    related: ["vat", "vat mount", "vat mounts", "query-language", "output"],
+    related: ["vat", "vat mount", "vat mounts", "vat watch", "query-language", "output"],
+  },
+  {
+    id: "vat watch",
+    title: "Watch mounted VAT queries",
+    summary: "Stream VAT query changes as mounts refresh from AX observer triggers.",
+    aliases: [],
+    usage: ["gui vat watch [--once] [--filter <kinds>] '<query>'"],
+    examples: [
+      "gui vat watch 'Application { Window }'",
+      "gui vat watch --once --filter updated 'Window { Button }'",
+    ],
+    notes: [
+      "The daemon emits no initial payload; the stream stays quiet until the first qualifying change.",
+      "--filter accepts a comma-separated subset of added, removed, updated.",
+      "JSON mode emits NDJSON with source vat.watch. Text mode prints a compact change summary followed by the new rendered VAT query result.",
+    ],
+    related: ["vat", "vat query", "output"],
   },
   {
     id: "ax",
@@ -1762,6 +1782,7 @@ export function renderHelpIndex(): string {
       "gui help vat policy",
       "gui help vat unmount",
       "gui help vat query",
+      "gui help vat watch",
       "gui help ax",
       "gui help cg",
       "gui help ws",

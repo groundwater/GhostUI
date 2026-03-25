@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { __setAuthAccessGroupReaderForTests, __setDaemonAuthSecretReaderForTests, daemonFetch, dragWindow, fetchFilteredCGWindows, fetchPbRead, postPbWrite, fetchPbTypes, postPbClear, fetchDisplayList, fetchDisplayMain, fetchDisplayById, fetchDefaultsRead, postDefaultsWrite, fetchDefaultsDomains, postDrawOverlay, findCGWindowAt, focusWindow, killActor, listActors, postRecFilmstrip, postRecImage, runActor, spawnActor, postCgMove, postCgClick, postCgDoubleClick, postCgDrag, postCgScroll, postCgKeyDown, postCgKeyUp, postCgModDown, postCgModUp, fetchCgMousePos, fetchCgMouseState, postVatMount, fetchVatMounts, fetchVatTree, deleteVatMount, resetDaemonAuthSecretCache, VatMountRequestError } from "./client.js";
+import { __setAuthAccessGroupReaderForTests, __setDaemonAuthSecretReaderForTests, daemonFetch, dragWindow, fetchFilteredCGWindows, fetchPbRead, postPbWrite, fetchPbTypes, postPbClear, fetchDisplayList, fetchDisplayMain, fetchDisplayById, fetchDefaultsRead, postDefaultsWrite, fetchDefaultsDomains, postDrawOverlay, findCGWindowAt, focusWindow, killActor, listActors, postRecFilmstrip, postRecImage, runActor, spawnActor, postCgMove, postCgClick, postCgDoubleClick, postCgDrag, postCgScroll, postCgKeyDown, postCgKeyUp, postCgModDown, postCgModUp, fetchCgMousePos, fetchCgMouseState, postVatMount, fetchVatMounts, fetchVatTree, openVatWatchStream, deleteVatMount, resetDaemonAuthSecretCache, VatMountRequestError } from "./client.js";
 
 afterEach(() => {
   __setAuthAccessGroupReaderForTests();
@@ -250,6 +250,34 @@ describe("vat client", () => {
       expect("tree" in mounts[0]).toBe(false);
     } finally {
       restore();
+    }
+  });
+
+  test("openVatWatchStream targets the VAT watch endpoint with once/filter params", async () => {
+    const originalFetch = globalThis.fetch;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("{\"source\":\"vat.watch\"}\n"));
+        controller.close();
+      },
+    });
+    const liveResponse = new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/x-ndjson" },
+    });
+    let seenUrl = "";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      seenUrl = typeof input === "string" ? input : input.toString();
+      return liveResponse;
+    }) as typeof fetch;
+
+    try {
+      const result = await openVatWatchStream("Window", { once: true, filter: ["updated", "removed"] });
+      expect(result).toBe(liveResponse);
+      expect(seenUrl).toBe("http://localhost:7861/api/vat/watch?q=Window&once=1&filter=updated%2Cremoved");
+      expect(await result.text()).toBe("{\"source\":\"vat.watch\"}\n");
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 
