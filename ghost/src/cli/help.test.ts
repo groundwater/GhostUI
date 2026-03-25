@@ -154,6 +154,7 @@ describe("cli help rendering", () => {
     expect(help).toContain("dims the complement outside that union");
     expect(help).toContain("`spotlight` accepts --duration and defaults to 1200ms");
     expect(help).toContain("defaults to color `#FF3B30`, size `6`, length `100`, and duration `400`");
+    expect(help).toContain("`scan` defaults to 500ms. `xray` defaults to 650ms. `spotlight` and `outline` default to 1200ms. `arrow` defaults to 400ms.");
     expect(help).toContain("Duplicate bounds are deduplicated");
     expect(help).toContain("`gfx write` is intentionally not shipped.");
     expect(help).not.toContain("gui gfx write");

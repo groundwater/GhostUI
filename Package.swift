@@ -25,5 +25,10 @@ let package = Package(
                               "-Xlinker", "macOS/GhostUI/Resources/Info.plist"])
             ]
         ),
+        .testTarget(
+            name: "GhostUITests",
+            dependencies: ["GhostUI"],
+            path: "Tests/GhostUITests"
+        ),
     ]
 )

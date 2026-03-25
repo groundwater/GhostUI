@@ -8,6 +8,7 @@ import CoreImage
 final class DrawOverlayService {
     static let shared = DrawOverlayService()
     private init() {}
+    private static let spotlightEpsilon: CGFloat = 0.001
 
     private var activeContainer: CALayer?
     private var shapeLayersByKey: [String: CAShapeLayer] = [:]
@@ -379,13 +380,105 @@ final class DrawOverlayService {
         return path
     }
 
-    private static func makeSpotlightPath(in bounds: CGRect, cutouts: [CGRect], cornerRadius: CGFloat) -> CGPath {
+    static func makeSpotlightPath(in bounds: CGRect, cutouts: [CGRect], cornerRadius: CGFloat) -> CGPath {
         let path = CGMutablePath()
         path.addRect(bounds)
-        for cutout in cutouts {
-            path.addPath(makeRectPath(for: cutout, cornerRadius: cornerRadius))
+        let coalescedCutouts = coalescedSpotlightCutouts(cutouts)
+        let usesRoundedCutouts = coalescedCutouts.count == cutouts.count
+        for cutout in coalescedCutouts {
+            path.addPath(makeRectPath(for: cutout, cornerRadius: usesRoundedCutouts ? cornerRadius : 0))
         }
         return path
+    }
+
+    static func coalescedSpotlightCutouts(_ cutouts: [CGRect]) -> [CGRect] {
+        let normalized = cutouts
+            .map(\.standardized)
+            .filter { $0.width > 0 && $0.height > 0 }
+            .sorted {
+                if !approximatelyEqual($0.minY, $1.minY) {
+                    return $0.minY < $1.minY
+                }
+                if !approximatelyEqual($0.maxY, $1.maxY) {
+                    return $0.maxY < $1.maxY
+                }
+                return $0.minX < $1.minX
+            }
+        guard normalized.count > 1 else {
+            return normalized
+        }
+
+        let ys = Array(Set(normalized.flatMap { [$0.minY, $0.maxY] })).sorted()
+        guard ys.count > 1 else {
+            return normalized
+        }
+
+        var coalesced: [CGRect] = []
+        for index in 0..<(ys.count - 1) {
+            let minY = ys[index]
+            let maxY = ys[index + 1]
+            let height = maxY - minY
+            if height <= 0 {
+                continue
+            }
+
+            let intervals = mergedIntervals(
+                normalized.compactMap { rect -> ClosedRange<CGFloat>? in
+                    guard rect.maxY > minY + spotlightEpsilon && rect.minY < maxY - spotlightEpsilon else {
+                        return nil
+                    }
+                    return rect.minX...rect.maxX
+                }
+            )
+
+            for interval in intervals {
+                let rect = CGRect(
+                    x: interval.lowerBound,
+                    y: minY,
+                    width: interval.upperBound - interval.lowerBound,
+                    height: height
+                )
+                if var last = coalesced.last,
+                   approximatelyEqual(last.minX, rect.minX),
+                   approximatelyEqual(last.maxX, rect.maxX),
+                   approximatelyEqual(last.maxY, rect.minY) {
+                    last.size.height += rect.height
+                    coalesced[coalesced.count - 1] = last
+                } else {
+                    coalesced.append(rect)
+                }
+            }
+        }
+
+        return coalesced
+    }
+
+    private static func mergedIntervals(_ intervals: [ClosedRange<CGFloat>]) -> [ClosedRange<CGFloat>] {
+        let sorted = intervals.sorted { lhs, rhs in
+            if !approximatelyEqual(lhs.lowerBound, rhs.lowerBound) {
+                return lhs.lowerBound < rhs.lowerBound
+            }
+            return lhs.upperBound < rhs.upperBound
+        }
+        guard var current = sorted.first else {
+            return []
+        }
+
+        var merged: [ClosedRange<CGFloat>] = []
+        for interval in sorted.dropFirst() {
+            if interval.lowerBound <= current.upperBound + spotlightEpsilon {
+                current = current.lowerBound...max(current.upperBound, interval.upperBound)
+            } else {
+                merged.append(current)
+                current = interval
+            }
+        }
+        merged.append(current)
+        return merged
+    }
+
+    private static func approximatelyEqual(_ lhs: CGFloat, _ rhs: CGFloat) -> Bool {
+        abs(lhs - rhs) <= spotlightEpsilon
     }
 
     private static func pathsEqual(_ lhs: CGPath, _ rhs: CGPath) -> Bool {

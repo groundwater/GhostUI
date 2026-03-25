@@ -112,7 +112,7 @@ const HELP_TOPICS: HelpTopic[] = [
       "`spotlight` accepts --duration and defaults to 1200ms, matching the other non-scan/xray overlay lifetimes.",
       "`arrow` defaults to color `#FF3B30`, size `6`, length `100`, and duration `400`. Use --from <x> <y> to override the starting point and ignore --length.",
       AX_TARGET_BEARING_JSON_TYPE_NOTE,
-      "`scan` defaults to 500ms. `xray` defaults to 650ms. `spotlight`, `outline`, and `arrow` default to 1200ms.",
+      "`scan` defaults to 500ms. `xray` defaults to 650ms. `spotlight` and `outline` default to 1200ms. `arrow` defaults to 400ms.",
       "Duplicate bounds are deduplicated before rendering so the same rect is not annotated twice.",
       "`gfx write` is intentionally not shipped.",
     ],
