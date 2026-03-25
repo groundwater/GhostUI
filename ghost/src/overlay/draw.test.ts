@@ -116,7 +116,7 @@ describe("draw script normalization", () => {
       rect: { x: 10, y: 20, width: 30, height: 40 },
       cornerRadius: 2,
     });
-    expect(result.items[0]?.animation).toEqual({
+    expect((result.items[0] as DrawRectItem)?.animation).toEqual({
       durMs: 600,
       ease: "easeOut",
     });
@@ -215,7 +215,7 @@ describe("draw script normalization", () => {
     expect(() => normalizeDrawScriptPayload({})).toThrow("items must be an array");
     expect(() => normalizeDrawScriptPayload({
       items: [{ kind: "circle", rect: { x: 0, y: 0, width: 10, height: 10 } }],
-    })).toThrow('items[0].kind must be "rect", "line", or "xray"');
+    })).toThrow('items[0].kind must be "rect", "line", "xray", or "spotlight"');
     expect(() => normalizeDrawScriptPayload({
       items: [{ kind: "rect", rect: { x: 0, y: 0, width: 0, height: 10 } }],
     })).toThrow("items[0].rect.width must be greater than 0");
@@ -249,6 +249,50 @@ describe("draw script normalization", () => {
   test("wraps parse failures as validation errors", () => {
     expect(() => normalizeDrawScriptText("{")).toThrow(DrawScriptValidationError);
     expect(() => normalizeDrawScriptText("")).toThrow("stdin payload is empty");
+  });
+});
+
+describe("draw script spotlight normalization", () => {
+  test("normalizes a minimal spotlight payload with dimmer defaults", () => {
+    const result = normalizeDrawScriptPayload({
+      items: [
+        {
+          kind: "spotlight",
+          rects: [
+            { x: 40, y: 50, width: 300, height: 200 },
+            { x: 400, y: 50, width: 320, height: 220 },
+          ],
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      coordinateSpace: "screen",
+      items: [
+        {
+          kind: "spotlight",
+          remove: false,
+          rects: [
+            { x: 40, y: 50, width: 300, height: 200 },
+            { x: 400, y: 50, width: 320, height: 220 },
+          ],
+          style: {
+            fill: "#000000B8",
+            cornerRadius: 18,
+            opacity: 1,
+          },
+        },
+      ],
+    });
+  });
+
+  test("rejects invalid spotlight payloads", () => {
+    expect(() => normalizeDrawScriptPayload({
+      items: [{ kind: "spotlight" }],
+    })).toThrow("items[0].rects is required");
+    expect(() => normalizeDrawScriptPayload({
+      items: [{ kind: "spotlight", rects: [{ x: 0, y: 0, width: 10, height: 10 }], style: { fill: "black" } }],
+    })).toThrow("items[0].style.fill must be a hex color");
   });
 });
 
@@ -357,7 +401,7 @@ describe("draw script line normalization", () => {
       lineWidth: 6,
       opacity: 0.35,
     });
-    expect(result.items[0]?.animation).toEqual({
+    expect((result.items[0] as DrawLineItem)?.animation).toEqual({
       durMs: 500,
       ease: "linear",
     });
@@ -551,9 +595,11 @@ describe("draw script xray normalization", () => {
       ],
     });
 
-    expect(result.items[0]?.animation).toEqual({
-      durMs: 800,
-      ease: "linear",
+    expect(result.items[0]).toMatchObject({
+      animation: {
+        durMs: 800,
+        ease: "linear",
+      },
     });
   });
 
@@ -625,7 +671,7 @@ describe("draw script xray normalization", () => {
     // unknown kind still rejected
     expect(() => normalizeDrawScriptPayload({
       items: [{ kind: "circle", rect: { x: 0, y: 0, width: 10, height: 10 } }],
-    })).toThrow('items[0].kind must be "rect", "line", or "xray"');
+    })).toThrow('items[0].kind must be "rect", "line", "xray", or "spotlight"');
   });
 
   test("mixed payload with rect, line, and xray", () => {

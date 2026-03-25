@@ -21,9 +21,13 @@ import {
   buildGfxOutlineDrawScriptFromText,
   buildGfxScanOverlayRequestFromText,
   buildGfxSpotlightDrawScriptFromText,
-  buildGfxTextPlacementsFromText,
   buildGfxXrayDrawScriptFromText,
   DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+  DEFAULT_GFX_ARROW_COLOR,
+  DEFAULT_GFX_ARROW_DURATION_MS,
+  DEFAULT_GFX_ARROW_LENGTH,
+  DEFAULT_GFX_ARROW_SIZE,
+  DEFAULT_GFX_XRAY_DURATION_MS,
   formatVatMountOutput,
   formatVatMountsOutput,
   formatVatPolicyOutput,
@@ -58,6 +62,8 @@ import {
   summarizeVatWatchChanges,
   shouldEmitPassthroughStdout,
   formatVatMountError,
+  parseGfxArrowOptions,
+  parseGfxDuration,
 } from "./main.js";
 import {
   buildCLICompositionPayloadFromAXQueryMatch,
@@ -1261,45 +1267,83 @@ describe("ca highlight AX bridge", () => {
 
     expect(buildGfxXrayDrawScriptFromText(formatVatQueryOutput(tree, "Window[frame]", false))).toEqual({
       coordinateSpace: "screen",
-      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
       items: [
         {
           kind: "xray",
           rect: { x: 40, y: 50, width: 300, height: 200 },
           direction: "leftToRight",
-          animation: { durMs: 650, ease: "easeInOut" },
+          animation: { durMs: DEFAULT_GFX_XRAY_DURATION_MS, ease: "easeInOut" },
         },
         {
           kind: "xray",
           rect: { x: 400, y: 50, width: 320, height: 220 },
           direction: "leftToRight",
-          animation: { durMs: 650, ease: "easeInOut" },
+          animation: { durMs: DEFAULT_GFX_XRAY_DURATION_MS, ease: "easeInOut" },
         },
       ],
     });
   });
 
-  test("builds gfx spotlight draw scripts with spotlight styling", () => {
-    const script = buildGfxSpotlightDrawScriptFromText(JSON.stringify(target));
+  test("builds gfx spotlight draw scripts from the union of resolved rects", () => {
+    const tree: PlainNode = {
+      _tag: "VATRoot",
+      _children: [
+        {
+          _tag: "Application",
+          _children: [
+            {
+              _tag: "Window",
+              frame: { x: 40, y: 50, width: 300, height: 200 },
+            },
+            {
+              _tag: "Window",
+              frame: { x: 400, y: 50, width: 320, height: 220 },
+            },
+          ],
+        },
+      ],
+    };
+
+    const script = buildGfxSpotlightDrawScriptFromText(formatVatQueryOutput(tree, "Window[frame]", false));
 
     expect(script.coordinateSpace).toBe("screen");
     expect(script.timeout).toBe(DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
     expect(script.items).toEqual([
       {
-        kind: "rect",
-        rect: { x: 100, y: 100, width: 80, height: 40 },
+        kind: "spotlight",
+        rects: [
+          { x: 40, y: 50, width: 300, height: 200 },
+          { x: 400, y: 50, width: 320, height: 220 },
+        ],
         style: {
-          stroke: "#FFD54F",
-          fill: "#FFD54F33",
-          lineWidth: 3,
-          cornerRadius: 14,
+          fill: "#000000B8",
+          cornerRadius: 18,
           opacity: 1,
         },
       },
     ]);
   });
 
-  test("builds gfx arrow draw scripts with one shaft and two head lines per rect", () => {
+  test("builds gfx spotlight draw scripts with an explicit duration", () => {
+    const script = buildGfxSpotlightDrawScriptFromText(JSON.stringify(target), 900);
+
+    expect(script.timeout).toBe(900);
+    expect(script.items).toEqual([
+      {
+        kind: "spotlight",
+        rects: [
+          { x: 100, y: 100, width: 80, height: 40 },
+        ],
+        style: {
+          fill: "#000000B8",
+          cornerRadius: 18,
+          opacity: 1,
+        },
+      },
+    ]);
+  });
+
+  test("builds gfx arrow draw scripts with animated red defaults", () => {
     const tree: PlainNode = {
       _tag: "VATRoot",
       _children: [
@@ -1325,38 +1369,29 @@ describe("ca highlight AX bridge", () => {
     expect(script.timeout).toBe(DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
     expect(script.items).toHaveLength(6);
     expect(script.items.every((item) => item.kind === "line")).toBe(true);
-  });
-
-  test("builds gfx text placements at the center of every resolved rect", () => {
-    const tree: PlainNode = {
-      _tag: "VATRoot",
-      _children: [
-        {
-          _tag: "Application",
-          _children: [
-            {
-              _tag: "Window",
-              frame: { x: 40, y: 50, width: 300, height: 200 },
-            },
-            {
-              _tag: "Window",
-              frame: { x: 400, y: 50, width: 320, height: 220 },
-            },
-          ],
+    expect(script.items[0]).toMatchObject({
+      from: {
+        line: {
+          from: { x: 190 - DEFAULT_GFX_ARROW_LENGTH, y: 150 - DEFAULT_GFX_ARROW_LENGTH },
+          to: { x: 190 - DEFAULT_GFX_ARROW_LENGTH, y: 150 - DEFAULT_GFX_ARROW_LENGTH },
         },
-      ],
-    };
-
-    expect(buildGfxTextPlacementsFromText(formatVatQueryOutput(tree, "Window[frame]", false), "Review this")).toEqual([
-      {
-        point: { x: 190, y: 150 },
-        text: "Review this",
+        stroke: DEFAULT_GFX_ARROW_COLOR,
+        lineWidth: DEFAULT_GFX_ARROW_SIZE,
       },
-      {
-        point: { x: 560, y: 160 },
-        text: "Review this",
+      line: {
+        from: { x: 190 - DEFAULT_GFX_ARROW_LENGTH, y: 150 - DEFAULT_GFX_ARROW_LENGTH },
+        to: { x: 190, y: 150 },
       },
-    ]);
+      style: {
+        stroke: DEFAULT_GFX_ARROW_COLOR,
+        lineWidth: DEFAULT_GFX_ARROW_SIZE,
+        opacity: 1,
+      },
+      animation: {
+        durMs: DEFAULT_GFX_ARROW_DURATION_MS,
+        ease: "easeInOut",
+      },
+    });
   });
 
   test("builds gfx scan overlay requests without outline rects", () => {
@@ -1388,9 +1423,54 @@ describe("ca highlight AX bridge", () => {
     });
   });
 
-  test("rejects empty gfx text payloads", () => {
-    expect(() => buildGfxTextPlacementsFromText(JSON.stringify(target), "   "))
-      .toThrow("gui gfx text - text must be non-empty");
+  test("parses gfx duration and strips the flag pair", () => {
+    const args = ["--duration", "900", "-"];
+    expect(parseGfxDuration(args, "gfx xray", DEFAULT_GFX_XRAY_DURATION_MS)).toBe(900);
+    expect(args).toEqual(["-"]);
+  });
+
+  test("parses gfx arrow options, including --from overriding the start point", () => {
+    const args = ["--color", "#00FF00", "--size", "9", "--length", "180", "--duration", "700", "--from", "12", "34", "-"];
+    expect(parseGfxArrowOptions(args, "gfx arrow")).toEqual({
+      color: "#00FF00",
+      size: 9,
+      length: 180,
+      durationMs: 700,
+      from: { x: 12, y: 34 },
+    });
+    expect(args).toEqual(["-"]);
+  });
+
+  test("builds gfx arrow draw scripts from an explicit origin", () => {
+    const script = buildGfxArrowDrawScriptFromText(JSON.stringify(target), {
+      from: { x: 12, y: 34 },
+      color: "#00FF00",
+      size: 9,
+      length: 180,
+      durationMs: 700,
+    });
+
+    expect(script.items[0]).toMatchObject({
+      from: {
+        line: {
+          from: { x: 12, y: 34 },
+          to: { x: 12, y: 34 },
+        },
+      },
+      line: {
+        from: { x: 12, y: 34 },
+        to: { x: 140, y: 120 },
+      },
+      style: {
+        stroke: "#00FF00",
+        lineWidth: 9,
+        opacity: 1,
+      },
+      animation: {
+        durMs: 700,
+        ease: "easeInOut",
+      },
+    });
   });
 
   test("rejects VAT query payloads without bounds/frame coordinates", () => {

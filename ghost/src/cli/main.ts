@@ -1414,6 +1414,10 @@ function sameAXTarget(left: AXTarget, right: AXTarget): boolean {
 export const DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS = 1200;
 export const DEFAULT_GFX_SCAN_DURATION_MS = 500;
 export const DEFAULT_GFX_XRAY_DURATION_MS = 650;
+export const DEFAULT_GFX_ARROW_DURATION_MS = 400;
+export const DEFAULT_GFX_ARROW_COLOR = "#FF3B30";
+export const DEFAULT_GFX_ARROW_SIZE = 6;
+export const DEFAULT_GFX_ARROW_LENGTH = 100;
 
 function normalizeHighlightRect(value: unknown): CLICompositionRect | null {
   if (typeof value === "string") {
@@ -1551,42 +1555,39 @@ function buildOutlineItems(rects: CLICompositionRect[]): DrawScript["items"] {
   }));
 }
 
-function buildXrayItems(rects: CLICompositionRect[]): DrawScript["items"] {
-  return rects.map((rect) => ({
-    kind: "xray" as const,
-    rect,
-    direction: "leftToRight" as const,
-    animation: { durMs: DEFAULT_GFX_XRAY_DURATION_MS, ease: "easeInOut" as const },
-  }));
-}
-
 function buildSpotlightItems(rects: CLICompositionRect[]): DrawScript["items"] {
-  return rects.map((rect) => ({
-    kind: "rect" as const,
-    rect,
+  return [{
+    kind: "spotlight" as const,
+    rects,
     style: {
-      stroke: "#FFD54F",
-      fill: "#FFD54F33",
-      lineWidth: 3,
-      cornerRadius: 14,
+      fill: "#000000B8",
+      cornerRadius: 18,
       opacity: 1,
     },
-  }));
+  }];
 }
 
-function buildArrowItems(rects: CLICompositionRect[]): DrawScript["items"] {
+export interface GfxArrowOptions {
+  color: string;
+  size: number;
+  length: number;
+  durationMs: number;
+  from?: { x: number; y: number };
+}
+
+function buildArrowItems(rects: CLICompositionRect[], options: GfxArrowOptions): DrawScript["items"] {
   const items: DrawScript["items"] = [];
   for (const rect of rects) {
     const center = {
       x: rect.x + rect.width / 2,
       y: rect.y + rect.height / 2,
     };
-    const start = {
-      x: rect.x - Math.min(Math.max(rect.width * 0.22, 18), 52),
-      y: rect.y - Math.min(Math.max(rect.height * 0.22, 18), 52),
+    const start = options.from ?? {
+      x: center.x - options.length,
+      y: center.y - options.length,
     };
     const angle = Math.atan2(center.y - start.y, center.x - start.x);
-    const headLength = Math.min(Math.max(Math.min(rect.width, rect.height) * 0.18, 10), 18);
+    const headLength = Math.max(options.size * 3, options.size + 6);
     const headSpread = Math.PI / 7;
     const left = {
       x: center.x - headLength * Math.cos(angle - headSpread),
@@ -1597,14 +1598,32 @@ function buildArrowItems(rects: CLICompositionRect[]): DrawScript["items"] {
       y: center.y - headLength * Math.sin(angle + headSpread),
     };
     const style = {
-      stroke: "#FFB300",
-      lineWidth: 3,
+      stroke: options.color,
+      lineWidth: options.size,
       opacity: 1,
     };
     items.push(
-      { kind: "line" as const, line: { from: start, to: center }, style },
-      { kind: "line" as const, line: { from: center, to: left }, style },
-      { kind: "line" as const, line: { from: center, to: right }, style },
+      {
+        kind: "line" as const,
+        from: { line: { from: start, to: start }, lineWidth: options.size, stroke: options.color, opacity: 1 },
+        line: { from: start, to: center },
+        style,
+        animation: { durMs: options.durationMs, ease: "easeInOut" as const },
+      },
+      {
+        kind: "line" as const,
+        from: { line: { from: center, to: center }, lineWidth: options.size, stroke: options.color, opacity: 1 },
+        line: { from: center, to: left },
+        style,
+        animation: { durMs: options.durationMs, ease: "easeInOut" as const },
+      },
+      {
+        kind: "line" as const,
+        from: { line: { from: center, to: center }, lineWidth: options.size, stroke: options.color, opacity: 1 },
+        line: { from: center, to: right },
+        style,
+        animation: { durMs: options.durationMs, ease: "easeInOut" as const },
+      },
     );
   }
   return items;
@@ -1635,26 +1654,41 @@ export function buildGfxOutlineDrawScriptFromText(
 
 export function buildGfxXrayDrawScriptFromText(
   input: string,
-  timeoutMs = DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+  durationMs = DEFAULT_GFX_XRAY_DURATION_MS,
 ): DrawScript {
   const rects = resolveGfxRectsFromText(input, "gui gfx xray -");
-  return buildGfxDrawScript(rects, buildXrayItems(rects), timeoutMs);
+  return {
+    coordinateSpace: "screen",
+    items: rects.map((rect) => ({
+      kind: "xray" as const,
+      rect,
+      direction: "leftToRight" as const,
+      animation: { durMs: durationMs, ease: "easeInOut" as const },
+    })),
+  };
 }
 
 export function buildGfxSpotlightDrawScriptFromText(
   input: string,
-  timeoutMs = DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+  durationMs = DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
 ): DrawScript {
   const rects = resolveGfxRectsFromText(input, "gui gfx spotlight -");
-  return buildGfxDrawScript(rects, buildSpotlightItems(rects), timeoutMs);
+  return buildGfxDrawScript(rects, buildSpotlightItems(rects), durationMs);
 }
 
 export function buildGfxArrowDrawScriptFromText(
   input: string,
-  timeoutMs = DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+  options: Partial<GfxArrowOptions> = {},
 ): DrawScript {
   const rects = resolveGfxRectsFromText(input, "gui gfx arrow -");
-  return buildGfxDrawScript(rects, buildArrowItems(rects), timeoutMs);
+  const resolvedOptions: GfxArrowOptions = {
+    color: options.color ?? DEFAULT_GFX_ARROW_COLOR,
+    size: options.size ?? DEFAULT_GFX_ARROW_SIZE,
+    length: options.length ?? DEFAULT_GFX_ARROW_LENGTH,
+    durationMs: options.durationMs ?? DEFAULT_GFX_ARROW_DURATION_MS,
+    from: options.from,
+  };
+  return buildGfxDrawScript(rects, buildArrowItems(rects, resolvedOptions), DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
 }
 
 export function buildAXHighlightDrawScriptFromText(
@@ -1663,22 +1697,6 @@ export function buildAXHighlightDrawScriptFromText(
 ): DrawScript {
   const rects = resolveGfxRectsFromText(input, "gui ca highlight -");
   return buildGfxDrawScript(rects, buildOutlineItems(rects), timeoutMs);
-}
-
-export function buildGfxTextPlacementsFromText(
-  input: string,
-  text: string,
-): Array<{ point: { x: number; y: number }; text: string }> {
-  if (text.trim().length === 0) {
-    throw new Error("gui gfx text - text must be non-empty");
-  }
-  return resolveGfxRectsFromText(input, "gui gfx text -").map((rect) => ({
-    point: {
-      x: rect.x + rect.width / 2,
-      y: rect.y + rect.height / 2,
-    },
-    text,
-  }));
 }
 
 export function buildGfxScanOverlayRequestFromText(
@@ -1692,30 +1710,6 @@ export function buildGfxScanOverlayRequestFromText(
     rects: resolveGfxRectsFromText(input, "gui gfx scan -"),
     durationMs,
   };
-}
-
-async function runGfxTextFromText(
-  input: string,
-  text: string,
-  timeoutMs = DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
-): Promise<void> {
-  const placements = buildGfxTextPlacementsFromText(input, text);
-  const actorNames = placements.map((_, index) => `gfx.text.${process.pid}.${Date.now()}.${index}`);
-  try {
-    await Promise.all(actorNames.map((name) => spawnActor("pointer", name)));
-    await Promise.all(placements.map((placement, index) => runActor(actorNames[index]!, {
-      kind: "move",
-      to: placement.point,
-      style: "fast",
-    })));
-    await Promise.all(placements.map((placement, index) => runActor(
-      actorNames[index]!,
-      { kind: "narrate", text: placement.text },
-      timeoutMs,
-    )));
-  } finally {
-    await Promise.allSettled(actorNames.map((name) => killActor(name)));
-  }
 }
 
 async function runGfxScanFromText(
@@ -1746,6 +1740,102 @@ function parseGfxTimeout(
     index--;
   }
   return timeoutMs;
+}
+
+const GFX_TEXT_COLOR_RE = /^#(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
+
+export function parseGfxDuration(
+  argv: string[],
+  usageTopic: string,
+  defaultDurationMs: number,
+): number {
+  let durationMs = defaultDurationMs;
+  for (let index = 0; index < argv.length; index++) {
+    if (argv[index] !== "--duration") {
+      continue;
+    }
+    const raw = argv[index + 1];
+    const parsed = Number(raw);
+    if (!raw || !Number.isFinite(parsed) || parsed <= 0) {
+      failUsage(usageTopic, "--duration requires a positive number of milliseconds.");
+    }
+    durationMs = parsed;
+    argv.splice(index, 2);
+    index--;
+  }
+  return durationMs;
+}
+
+export function parseGfxArrowOptions(
+  argv: string[],
+  usageTopic: string,
+): GfxArrowOptions {
+  let color = DEFAULT_GFX_ARROW_COLOR;
+  let size = DEFAULT_GFX_ARROW_SIZE;
+  let length = DEFAULT_GFX_ARROW_LENGTH;
+  let durationMs = DEFAULT_GFX_ARROW_DURATION_MS;
+  let from: { x: number; y: number } | undefined;
+
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (token === "--color") {
+      const raw = argv[index + 1];
+      if (!raw || !GFX_TEXT_COLOR_RE.test(raw)) {
+        failUsage(usageTopic, "--color requires a hex color like #RRGGBB or #RRGGBBAA.");
+      }
+      color = raw;
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+    if (token === "--size") {
+      const raw = argv[index + 1];
+      const parsed = Number(raw);
+      if (!raw || !Number.isFinite(parsed) || parsed <= 0) {
+        failUsage(usageTopic, "--size requires a positive number.");
+      }
+      size = parsed;
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+    if (token === "--length") {
+      const raw = argv[index + 1];
+      const parsed = Number(raw);
+      if (!raw || !Number.isFinite(parsed) || parsed <= 0) {
+        failUsage(usageTopic, "--length requires a positive number of pixels.");
+      }
+      length = parsed;
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+    if (token === "--duration") {
+      const raw = argv[index + 1];
+      const parsed = Number(raw);
+      if (!raw || !Number.isFinite(parsed) || parsed <= 0) {
+        failUsage(usageTopic, "--duration requires a positive number of milliseconds.");
+      }
+      durationMs = parsed;
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+    if (token === "--from") {
+      const rawX = argv[index + 1];
+      const rawY = argv[index + 2];
+      const parsedX = Number(rawX);
+      const parsedY = Number(rawY);
+      if (!rawX || !rawY || !Number.isFinite(parsedX) || !Number.isFinite(parsedY)) {
+        failUsage(usageTopic, "--from requires two finite coordinates.");
+      }
+      from = { x: parsedX, y: parsedY };
+      argv.splice(index, 3);
+      index--;
+    }
+  }
+
+  return { color, size, length, durationMs, from };
 }
 
 async function attachDrawOverlay(payload: DrawScript): Promise<void> {
@@ -2036,63 +2126,51 @@ async function main() {
         const gfxArgs = args.slice(2);
         switch (gfxCmd) {
           case "outline": {
-            const timeoutMs = parseGfxTimeout(gfxArgs, "gfx outline", DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
             if (gfxArgs.length !== 1 || gfxArgs[0] !== "-") {
               failUsage("gfx outline");
             }
             const input = await readStdinText("gfx outline");
-            await attachDrawOverlay(buildGfxOutlineDrawScriptFromText(input, timeoutMs));
+            await attachDrawOverlay(buildGfxOutlineDrawScriptFromText(input));
             emitPassthroughStdout(input, process.stdout.isTTY);
             break;
           }
           case "xray": {
-            const timeoutMs = parseGfxTimeout(gfxArgs, "gfx xray", DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
+            const durationMs = parseGfxDuration(gfxArgs, "gfx xray", DEFAULT_GFX_XRAY_DURATION_MS);
             if (gfxArgs.length !== 1 || gfxArgs[0] !== "-") {
               failUsage("gfx xray");
             }
             const input = await readStdinText("gfx xray");
-            await attachDrawOverlay(buildGfxXrayDrawScriptFromText(input, timeoutMs));
+            await attachDrawOverlay(buildGfxXrayDrawScriptFromText(input, durationMs));
             emitPassthroughStdout(input, process.stdout.isTTY);
             break;
           }
           case "spotlight": {
-            const timeoutMs = parseGfxTimeout(gfxArgs, "gfx spotlight", DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
+            const durationMs = parseGfxDuration(gfxArgs, "gfx spotlight", DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
             if (gfxArgs.length !== 1 || gfxArgs[0] !== "-") {
               failUsage("gfx spotlight");
             }
             const input = await readStdinText("gfx spotlight");
-            await attachDrawOverlay(buildGfxSpotlightDrawScriptFromText(input, timeoutMs));
+            await attachDrawOverlay(buildGfxSpotlightDrawScriptFromText(input, durationMs));
             emitPassthroughStdout(input, process.stdout.isTTY);
             break;
           }
           case "arrow": {
-            const timeoutMs = parseGfxTimeout(gfxArgs, "gfx arrow", DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
+            const arrowOptions = parseGfxArrowOptions(gfxArgs, "gfx arrow");
             if (gfxArgs.length !== 1 || gfxArgs[0] !== "-") {
               failUsage("gfx arrow");
             }
             const input = await readStdinText("gfx arrow");
-            await attachDrawOverlay(buildGfxArrowDrawScriptFromText(input, timeoutMs));
+            await attachDrawOverlay(buildGfxArrowDrawScriptFromText(input, arrowOptions));
             emitPassthroughStdout(input, process.stdout.isTTY);
             break;
           }
           case "scan": {
-            const timeoutMs = parseGfxTimeout(gfxArgs, "gfx scan", DEFAULT_GFX_SCAN_DURATION_MS);
+            const durationMs = parseGfxDuration(gfxArgs, "gfx scan", DEFAULT_GFX_SCAN_DURATION_MS);
             if (gfxArgs.length !== 1 || gfxArgs[0] !== "-") {
               failUsage("gfx scan");
             }
             const input = await readStdinText("gfx scan");
-            await runGfxScanFromText(input, timeoutMs);
-            emitPassthroughStdout(input, process.stdout.isTTY);
-            break;
-          }
-          case "text": {
-            const timeoutMs = parseGfxTimeout(gfxArgs, "gfx text", DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
-            const stdinIndex = gfxArgs.indexOf("-");
-            if (stdinIndex < 0 || gfxArgs.length !== 2 || stdinIndex !== 1 || !gfxArgs[0]) {
-              failUsage("gfx text");
-            }
-            const input = await readStdinText("gfx text");
-            await runGfxTextFromText(input, gfxArgs[0]!, timeoutMs);
+            await runGfxScanFromText(input, durationMs);
             emitPassthroughStdout(input, process.stdout.isTTY);
             break;
           }

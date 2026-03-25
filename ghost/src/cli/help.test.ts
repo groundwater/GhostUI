@@ -124,7 +124,7 @@ describe("cli help rendering", () => {
 
     expect(help).toContain("\"kind\":\"rect\"");
     expect(help).toContain("\"kind\":\"xray\"");
-    expect(help).toContain("`DrawScript = { coordinateSpace: \"screen\"; timeout?: number; items: Array<{ kind: \"rect\" | \"line\" | \"xray\"; ... }> }`");
+    expect(help).toContain("`DrawScript = { coordinateSpace: \"screen\"; timeout?: number; items: Array<{ kind: \"rect\" | \"line\" | \"xray\" | \"spotlight\"; ... }> }`");
     expect(help).toContain("\"timeout\":1200");
     expect(help).toContain("\"direction\":\"leftToRight\"");
     expect(help).toContain("\"animation\":{\"durMs\":650}");
@@ -133,7 +133,7 @@ describe("cli help rendering", () => {
     expect(help).toContain("xray capture requires Screen Recording permission");
     expect(help).toContain("current xray MVP is single-display");
     expect(help).toContain("timeout still controls the attached route lifetime");
-    expect(help).toContain("Supports rect, line, and xray items");
+    expect(help).toContain("Supports rect, line, xray, and spotlight items");
     expect(help).toContain("gui ca script -");
     expect(help).not.toContain("gui ca highlight [--timeout <ms>] -");
     expect(help).not.toContain("gui ax query --only --app Terminal '@@{Button[subrole~=DecrementPage]}' | gui ca highlight -");
@@ -144,17 +144,21 @@ describe("cli help rendering", () => {
   test("gfx help documents the public visual annotation command family", () => {
     const help = renderHelpTopic("gfx");
 
-    expect(help).toContain("gui gfx outline [--timeout <ms>] -");
-    expect(help).toContain("gui gfx scan [--timeout <ms>] -");
-    expect(help).toContain("gui gfx xray [--timeout <ms>] -");
-    expect(help).toContain("gui gfx spotlight [--timeout <ms>] -");
-    expect(help).toContain("gui gfx arrow [--timeout <ms>] -");
-    expect(help).toContain("gui gfx text [--timeout <ms>] \"<text>\" -");
+    expect(help).toContain("gui gfx outline -");
+    expect(help).toContain("gui gfx scan [--duration <milliseconds>] -");
+    expect(help).toContain("gui gfx xray [--duration <milliseconds>] -");
+    expect(help).toContain("gui gfx spotlight [--duration <milliseconds>] -");
+    expect(help).toContain("gui gfx arrow [--color <hex>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--from <x> <y>] -");
     expect(help).toContain("share the same target contract");
     expect(help).toContain("only drives the red scan-line overlay");
+    expect(help).toContain("dims the complement outside that union");
+    expect(help).toContain("`spotlight` accepts --duration and defaults to 1200ms");
+    expect(help).toContain("defaults to color `#FF3B30`, size `6`, length `100`, and duration `400`");
     expect(help).toContain("Duplicate bounds are deduplicated");
     expect(help).toContain("`gfx write` is intentionally not shipped.");
     expect(help).not.toContain("gui gfx write");
+    expect(help).not.toContain("gui gfx text");
+    expect(help).not.toContain("--timeout");
   });
 
   test("resolves canonical help topics and rejects removed AX shorthand", () => {

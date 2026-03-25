@@ -79,7 +79,21 @@ export interface DrawXrayItem {
 
 export type DrawXrayDirection = "leftToRight" | "rightToLeft" | "topToBottom" | "bottomToTop";
 
-export type DrawItem = DrawRectItem | DrawLineItem | DrawXrayItem;
+export interface DrawSpotlightStyle {
+  fill: string;
+  cornerRadius: number;
+  opacity: number;
+}
+
+export interface DrawSpotlightItem {
+  id?: string;
+  kind: "spotlight";
+  remove?: boolean;
+  rects?: DrawRect[];
+  style?: DrawSpotlightStyle;
+}
+
+export type DrawItem = DrawRectItem | DrawLineItem | DrawXrayItem | DrawSpotlightItem;
 
 export interface DrawScript {
   timeout?: number;
@@ -89,6 +103,7 @@ export interface DrawScript {
 
 type DrawRectStyleInput = Partial<DrawRectStyle>;
 type DrawLineStyleInput = Partial<DrawLineStyle>;
+type DrawSpotlightStyleInput = Partial<DrawSpotlightStyle>;
 
 interface DrawRectFromInput {
   rect?: unknown;
@@ -136,6 +151,14 @@ interface DrawXrayItemInput {
   animation?: unknown;
 }
 
+interface DrawSpotlightItemInput {
+  id?: unknown;
+  kind?: unknown;
+  remove?: unknown;
+  rects?: unknown;
+  style?: unknown;
+}
+
 interface DrawScriptInput {
   timeout?: unknown;
   version?: unknown;
@@ -163,6 +186,11 @@ const DEFAULT_LINE_STYLE: DrawLineStyle = {
 };
 
 const DEFAULT_XRAY_DIRECTION: DrawXrayDirection = "leftToRight";
+const DEFAULT_SPOTLIGHT_STYLE: DrawSpotlightStyle = {
+  fill: "#000000B8",
+  cornerRadius: 18,
+  opacity: 1,
+};
 
 const HEX_COLOR_RE = /^#(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
 const DRAW_ANIMATION_EASES = new Set<DrawAnimationEase>(["linear", "easeIn", "easeOut", "easeInOut"]);
@@ -442,6 +470,61 @@ function normalizeXrayItem(value: unknown, index: number): DrawXrayItem {
   };
 }
 
+function normalizeSpotlightStyle(value: unknown, path: string): DrawSpotlightStyle {
+  if (value === undefined) {
+    return { ...DEFAULT_SPOTLIGHT_STYLE };
+  }
+  const style = expectRecord(value, path) as DrawSpotlightStyleInput;
+  return {
+    fill: style.fill === undefined ? DEFAULT_SPOTLIGHT_STYLE.fill : expectHexColor(style.fill, `${path}.fill`),
+    cornerRadius: style.cornerRadius === undefined
+      ? DEFAULT_SPOTLIGHT_STYLE.cornerRadius
+      : expectNonNegativeNumber(style.cornerRadius, `${path}.cornerRadius`),
+    opacity: style.opacity === undefined ? DEFAULT_SPOTLIGHT_STYLE.opacity : expectOpacity(style.opacity, `${path}.opacity`),
+  };
+}
+
+function normalizeSpotlightItem(value: unknown, index: number): DrawSpotlightItem {
+  const item = expectRecord(value, `items[${index}]`) as DrawSpotlightItemInput;
+  if (item.kind !== "spotlight") {
+    throw new DrawScriptValidationError(`items[${index}].kind must be "spotlight"`);
+  }
+
+  const id = expectOptionalId(item.id, `items[${index}].id`);
+  const remove = item.remove === undefined ? false : item.remove;
+  if (typeof remove !== "boolean") {
+    throw new DrawScriptValidationError(`items[${index}].remove must be a boolean`);
+  }
+
+  if (remove && id === undefined) {
+    throw new DrawScriptValidationError(`items[${index}].remove requires items[${index}].id`);
+  }
+
+  if (!remove && item.rects === undefined) {
+    throw new DrawScriptValidationError(`items[${index}].rects is required`);
+  }
+
+  if (!remove && !Array.isArray(item.rects)) {
+    throw new DrawScriptValidationError(`items[${index}].rects must be an array`);
+  }
+
+  if (!remove && Array.isArray(item.rects) && item.rects.length === 0) {
+    throw new DrawScriptValidationError(`items[${index}].rects must contain at least one rect`);
+  }
+
+  const rects = Array.isArray(item.rects)
+    ? item.rects.map((rect, rectIndex) => normalizeRect(rect, `items[${index}].rects[${rectIndex}]`))
+    : undefined;
+
+  return {
+    id,
+    kind: "spotlight",
+    remove,
+    rects,
+    style: remove ? undefined : normalizeSpotlightStyle(item.style, `items[${index}].style`),
+  };
+}
+
 function normalizeItem(value: unknown, index: number): DrawItem {
   const item = expectRecord(value, `items[${index}]`);
   if (item.kind === "rect") {
@@ -453,7 +536,10 @@ function normalizeItem(value: unknown, index: number): DrawItem {
   if (item.kind === "xray") {
     return normalizeXrayItem(value, index);
   }
-  throw new DrawScriptValidationError(`items[${index}].kind must be "rect", "line", or "xray"`);
+  if (item.kind === "spotlight") {
+    return normalizeSpotlightItem(value, index);
+  }
+  throw new DrawScriptValidationError(`items[${index}].kind must be "rect", "line", "xray", or "spotlight"`);
 }
 
 export function normalizeDrawScriptPayload(value: unknown): DrawScript {

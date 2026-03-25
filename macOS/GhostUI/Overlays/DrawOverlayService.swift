@@ -10,7 +10,7 @@ final class DrawOverlayService {
     private init() {}
 
     private var activeContainer: CALayer?
-    private var layersByKey: [String: CAShapeLayer] = [:]
+    private var shapeLayersByKey: [String: CAShapeLayer] = [:]
     private var xrayLayersByKey: [String: CALayer] = [:]
     private var attachmentByKey: [String: String] = [:]
     private var xrayGenerationByKey: [String: Int] = [:]
@@ -22,6 +22,7 @@ final class DrawOverlayService {
 
             let decoder = JSONDecoder()
             guard let payload = try? decoder.decode(DrawOverlayPayload.self, from: jsonData) else {
+                NSLog("[DrawOverlayService] failed to decode draw payload")
                 return
             }
 
@@ -65,6 +66,10 @@ final class DrawOverlayService {
                     let fromView = OverlayWindowManager.shared.screenPointToView(line.from.cgPoint)
                     let toView = OverlayWindowManager.shared.screenPointToView(line.to.cgPoint)
                     finalPath = Self.makeLinePath(from: fromView, to: toView)
+                case .spotlight:
+                    guard let rects = item.rects, !rects.isEmpty else { continue }
+                    let finalViewRects = rects.map { OverlayWindowManager.shared.screenRectToView($0.cgRect) }
+                    finalPath = Self.makeSpotlightPath(in: container.bounds, cutouts: finalViewRects, cornerRadius: resolvedStyle.cornerRadius ?? 18)
                 case .xray:
                     guard let rect = item.rect else { continue }
                     let layerKey = Self.layerKey(for: item, attachmentId: attachmentId, index: index)
@@ -88,7 +93,7 @@ final class DrawOverlayService {
                 }
 
                 let layerKey = Self.layerKey(for: item, attachmentId: attachmentId, index: index)
-                let (shape, isNewLayer) = self.resolveLayer(forKey: layerKey, container: container)
+                let (shape, isNewLayer) = self.resolveShapeLayer(forKey: layerKey, container: container)
                 self.attachmentByKey[layerKey] = attachmentId
 
                 let startState = self.makeStartState(for: shape, item: item, resolvedStyle: resolvedStyle, finalPath: finalPath)
@@ -111,8 +116,15 @@ final class DrawOverlayService {
                 switch item.kind {
                 case .rect:
                     shape.fillColor = resolvedStyle.fillColor
+                    shape.fillRule = .nonZero
                 case .line:
                     shape.fillColor = nil
+                    shape.fillRule = .nonZero
+                case .spotlight:
+                    shape.fillColor = resolvedStyle.fillColor
+                    shape.strokeColor = nil
+                    shape.lineWidth = 0
+                    shape.fillRule = .evenOdd
                 case .xray:
                     break
                 }
@@ -164,7 +176,7 @@ final class DrawOverlayService {
     }
 
     private func removeLayer(forKey key: String) {
-        if let existing = layersByKey.removeValue(forKey: key) {
+        if let existing = shapeLayersByKey.removeValue(forKey: key) {
             existing.removeAllAnimations()
             existing.removeFromSuperlayer()
         }
@@ -175,18 +187,18 @@ final class DrawOverlayService {
         attachmentByKey.removeValue(forKey: key)
     }
 
-    private func resolveLayer(
+    private func resolveShapeLayer(
         forKey key: String,
         container: CALayer
     ) -> (CAShapeLayer, Bool) {
-        if let layer = layersByKey[key] {
+        if let layer = shapeLayersByKey[key] {
             return (layer, false)
         }
 
         let layer = CAShapeLayer()
         layer.frame = container.bounds
 
-        layersByKey[key] = layer
+        shapeLayersByKey[key] = layer
 
         return (layer, true)
     }
@@ -205,10 +217,12 @@ final class DrawOverlayService {
     private func pruneDetachedLayers() {
         guard let container = activeContainer else { return }
 
-        layersByKey = layersByKey.filter { $0.value.superlayer === container }
+        shapeLayersByKey = shapeLayersByKey.filter { $0.value.superlayer === container }
         xrayLayersByKey = xrayLayersByKey.filter { $0.value.superlayer === container }
         xrayCleanupWorkItemsByKey = xrayCleanupWorkItemsByKey.filter { xrayLayersByKey[$0.key] != nil }
-        attachmentByKey = attachmentByKey.filter { layersByKey[$0.key] != nil || xrayLayersByKey[$0.key] != nil }
+        attachmentByKey = attachmentByKey.filter {
+            shapeLayersByKey[$0.key] != nil || xrayLayersByKey[$0.key] != nil
+        }
     }
 
     private static func layerKey(for item: DrawOverlayItem, attachmentId: String, index: Int) -> String {
@@ -259,6 +273,8 @@ final class DrawOverlayService {
             }
         case .xray:
             break // xray items are handled separately via launchXrayCapture
+        case .spotlight:
+            break
         }
 
         if let presentation = shape.presentation() {
@@ -360,6 +376,15 @@ final class DrawOverlayService {
         let path = CGMutablePath()
         path.move(to: from)
         path.addLine(to: to)
+        return path
+    }
+
+    private static func makeSpotlightPath(in bounds: CGRect, cutouts: [CGRect], cornerRadius: CGFloat) -> CGPath {
+        let path = CGMutablePath()
+        path.addRect(bounds)
+        for cutout in cutouts {
+            path.addPath(makeRectPath(for: cutout, cornerRadius: cornerRadius))
+        }
         return path
     }
 
@@ -703,6 +728,7 @@ private struct DrawOverlayItem: Decodable {
     let kind: DrawOverlayKind
     let remove: Bool?
     let rect: DrawOverlayRect?
+    let rects: [DrawOverlayRect]?
     let line: DrawOverlayLine?
     let direction: String?
     let from: DrawOverlayItemFrom?
@@ -712,7 +738,16 @@ private struct DrawOverlayItem: Decodable {
 
 private extension DrawOverlayItem {
     var resolvedStyle: DrawOverlayStyle {
-        style ?? (kind == .rect ? .defaultRectStyle : .defaultLineStyle)
+        switch kind {
+        case .rect:
+            return style ?? .defaultRectStyle
+        case .line:
+            return style ?? .defaultLineStyle
+        case .xray:
+            return style ?? .defaultLineStyle
+        case .spotlight:
+            return style ?? .defaultSpotlightStyle
+        }
     }
 
     var scanDirection: DrawOverlayScanDirection {
@@ -747,6 +782,7 @@ private enum DrawOverlayKind: String, Decodable {
     case rect
     case line
     case xray
+    case spotlight
 }
 
 private enum DrawOverlayScanDirection: String {
@@ -834,6 +870,13 @@ private struct DrawOverlayStyle: Decodable {
         fill: nil,
         lineWidth: 2,
         cornerRadius: nil,
+        opacity: 1
+    )
+    static let defaultSpotlightStyle = DrawOverlayStyle(
+        stroke: nil,
+        fill: "#000000B8",
+        lineWidth: nil,
+        cornerRadius: 18,
         opacity: 1
     )
 
