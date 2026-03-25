@@ -211,9 +211,11 @@ describe("cli help rendering", () => {
     expect(help).toContain("gui ax query --visible [--json | --ndjson | --guiml] [--first | --only | --each] '<query>'");
     expect(help).toContain("GUIML output supports introspection queries like [*] or [**], and hybrid comma forms like [title,*].");
     expect(help).toContain("JSON and NDJSON also preserve them in serialized AX matches.");
+    expect(help).toContain("`Text` is the one broad text-control alias");
     expect(help).toContain("gui ax query --gui 'Application'");
     expect(help).toContain("gui ax query --visible 'Application'");
-    expect(help).toContain("gui ax cursor | gui ax query 'Input'");
+    expect(help).toContain("gui ax cursor | gui ax query 'Text'");
+    expect(help).not.toContain("gui ax cursor | gui ax query 'Input'");
     expect(help).toContain("relative to that payload");
     expect(help).not.toContain("gui ax query --all --gui 'Application'");
     expect(help).not.toContain("gui ax query --all --visible 'Window'");
@@ -223,6 +225,7 @@ describe("cli help rendering", () => {
   test("query-language topic does not redirect AX introspection to CRDT", () => {
     const help = renderHelpTopic("query-language");
     expect(help).toContain("Queries support [*] and [**] for introspection, plus comma-only hybrid forms like [title,*] or [title,**]. AX GUIML output renders them too.");
+    expect(help).toContain("`Text` is the one broad text-control alias");
     expect(help).not.toContain("Use gui crdt q for introspection output");
   });
 

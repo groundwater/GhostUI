@@ -715,10 +715,11 @@ const HELP_TOPICS: HelpTopic[] = [
       "gui ax query --all --each 'Window { Button }'",
       "gui ax query --app Terminal --first 'Button'",
       "gui ax query --pid 1234 'Button'",
-      "gui ax cursor | gui ax query 'Input'",
+      "gui ax cursor | gui ax query 'Text'",
     ],
     notes: [
       "GUIML output supports introspection queries like [*] or [**], and hybrid comma forms like [title,*]. JSON and NDJSON also preserve them in serialized AX matches.",
+      "Use literal tags by default. `Text` is the one broad text-control alias and matches `TextField`, `TextArea`, `SearchField`, and `ComboBox`. `Input` is not special.",
       "Without a cardinality flag, AX query prints one merged GUIML tree containing all matches.",
       "Use --first to print only the first matched GUIML tree, --only to require exactly one match, and --each to print one GUIML tree per match separated by blank lines.",
       "Default output is nested GUIML on a TTY, JSON when piped, and NDJSON when piped with --each.",
@@ -752,7 +753,7 @@ const HELP_TOPICS: HelpTopic[] = [
     usage: ["gui ax cursor"],
     examples: [
       "gui ax cursor",
-      "gui ax cursor | gui ax query --only 'Input'",
+      "gui ax cursor | gui ax query --only 'Text'",
       "gui ax cursor | gui ax type - 'foo'",
     ],
     notes: [
@@ -1581,6 +1582,7 @@ const HELP_TOPICS: HelpTopic[] = [
     ],
     notes: [
       "Use Tag#Id, predicates like [title=Save], and scopes like Parent { Child }.",
+      "Use literal tags by default. `Text` is the one broad text-control alias and matches `TextField`, `TextArea`, `SearchField`, and `ComboBox`. `Input` is not special.",
       "Prefix with @ to hide the matched wrapper in output, or @@ to also erase its ancestors from the rendered hierarchy.",
       "Nth selectors use :N, for example Button:0.",
       "Queries support [*] and [**] for introspection, plus comma-only hybrid forms like [title,*] or [title,**]. AX GUIML output renders them too.",

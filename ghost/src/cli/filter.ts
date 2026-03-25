@@ -668,13 +668,13 @@ function wrapInPath(node: PlainNode, path: PlainNode[]): PlainNode {
   return result;
 }
 
-const INPUT_TAGS = new Set(["TextField", "TextArea", "SearchField", "ComboBox"]);
+const TEXT_TAGS = new Set(["TextField", "TextArea", "SearchField", "ComboBox"]);
 
 function tagMatches(node: PlainNode, tag: string): boolean {
   if (tag === "*") return true;
-  if (tag === "Input") {
+  if (tag === "Text") {
     const nodeTag = node._tag.startsWith("AX") ? node._tag.slice(2) : node._tag;
-    return INPUT_TAGS.has(nodeTag);
+    return TEXT_TAGS.has(nodeTag);
   }
   if (node._tag === tag) return true;
   // Also match AX-prefixed roles: query "Button" matches _tag "AXButton"
@@ -1050,8 +1050,8 @@ export interface TreeMatch<T> {
 function tagMatchesG<T>(node: T, tag: string, acc: NodeAccessor<T>): boolean {
   if (tag === "*") return true;
   const nodeTag = acc.tag(node);
-  if (tag === "Input") {
-    return INPUT_TAGS.has(nodeTag.startsWith("AX") ? nodeTag.slice(2) : nodeTag);
+  if (tag === "Text") {
+    return TEXT_TAGS.has(nodeTag.startsWith("AX") ? nodeTag.slice(2) : nodeTag);
   }
   return nodeTag === tag || `AX${nodeTag}` === tag;
 }

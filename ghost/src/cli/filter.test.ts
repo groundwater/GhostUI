@@ -203,6 +203,34 @@ describe("findMatchedNodeWithContext — quoted identifiers with spaces (#166)",
   });
 });
 
+describe("query tag semantics — text controls", () => {
+  const tree: PlainNode = {
+    _tag: "Window",
+    _children: [
+      { _tag: "TextField", _id: "TextField:Name:0" },
+      { _tag: "TextArea", _id: "TextArea:Body:0" },
+      { _tag: "SearchField", _id: "SearchField:Search:0" },
+      { _tag: "ComboBox", _id: "ComboBox:Choice:0" },
+      { _tag: "StaticText", _id: "StaticText:Read only:0" },
+    ],
+  };
+
+  test("Text matches the text-control tags", () => {
+    const selection = selectForestMatchesWithCardinality([tree], parseQuery("Text"), "all");
+    expect(selection.matches.map(({ node }) => node._tag)).toEqual([
+      "TextField",
+      "TextArea",
+      "SearchField",
+      "ComboBox",
+    ]);
+  });
+
+  test("Input is no longer a catch-all alias", () => {
+    const selection = selectForestMatchesWithCardinality([tree], parseQuery("Input"), "all");
+    expect(selection.matches).toHaveLength(0);
+  });
+});
+
 // ─── bfsFirst ─────────────────────────────────────────────────────
 
 import { bfsFirst, filterTree, collectObscuredApps } from "./filter.js";

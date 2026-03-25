@@ -87,6 +87,50 @@ async function mountVatQueryActivationFixtures(): Promise<ReturnType<typeof crea
   return registry;
 }
 
+async function mountVatTextQueryFixtures(): Promise<ReturnType<typeof createVatRegistry>> {
+  const registry = createVatRegistry({
+    drivers: new Map([
+      [
+        "codex",
+        () => ({
+          tree: {
+            _tag: "Codex",
+            _children: [
+              {
+                _tag: "Window",
+                _id: "Codex",
+                _children: [
+                  { _tag: "TextField", _id: "TextField:Name:0" },
+                  { _tag: "TextArea", _id: "TextArea:Body:0" },
+                  { _tag: "SearchField", _id: "SearchField:Search:0" },
+                  { _tag: "ComboBox", _id: "ComboBox:Choice:0" },
+                  { _tag: "StaticText", _id: "StaticText:Read only:0" },
+                ],
+              },
+            ],
+          },
+        }),
+      ],
+    ]),
+  });
+
+  await handleVAT(
+    new Request("http://localhost:7861/api/vat/mount", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        path: "/Codex",
+        driver: "codex",
+        args: [],
+        mountPolicy: { kind: "auto", unmountTimeout: { kind: "never" } },
+      }),
+    }),
+    registry,
+  );
+
+  return registry;
+}
+
 afterEach(() => {
   __setNativeAXForTests();
 });
@@ -791,6 +835,26 @@ describe("VAT routes", () => {
         active: true,
       },
     ]);
+  });
+
+  test("vat queries use Text as the text-control alias", async () => {
+    const registry = await mountVatTextQueryFixtures();
+
+    const queryRes = await handleVAT(
+      new Request(`http://localhost:7861/api/vat/query?q=${encodeURIComponent("Text")}`),
+      registry,
+    );
+
+    expect(queryRes).not.toBeNull();
+    expect((queryRes as Response).status).toBe(200);
+    const queryBody = await (queryRes as Response).json();
+    const guiml = toGUIML(queryBody.nodes);
+    expect(queryBody.matchCount).toBe(4);
+    expect(guiml).toContain("TextField");
+    expect(guiml).toContain("TextArea");
+    expect(guiml).toContain("SearchField");
+    expect(guiml).toContain("ComboBox");
+    expect(guiml).not.toContain("StaticText");
   });
 
   test("vat queries with an explicit mount path only activate that mount", async () => {

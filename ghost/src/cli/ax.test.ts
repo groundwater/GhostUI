@@ -84,6 +84,17 @@ describe("matchTree with axNodeAccessor", () => {
       },
     ],
   };
+  const textTree: AXNode = {
+    role: "AXWindow",
+    title: "Editor",
+    children: [
+      { role: "AXTextField", label: "Name", value: "" },
+      { role: "AXTextArea", value: "notes" },
+      { role: "AXSearchField", placeholder: "Search" },
+      { role: "AXComboBox", value: "Choice" },
+      { role: "AXStaticText", value: "Read only" },
+    ],
+  };
 
   test("find all buttons by short name", () => {
     const matches = queryAX(tree, "Button");
@@ -192,10 +203,18 @@ describe("matchTree with axNodeAccessor", () => {
     expect(matches[0].node.label).toBe("Name");
   });
 
-  test("Input alias matches editable text roles", () => {
-    const matches = queryAX(tree, "Input");
-    expect(matches.length).toBe(1);
-    expect(matches[0].node.label).toBe("Name");
+  test("Text alias matches text-bearing controls", () => {
+    const matches = queryAX(textTree, "Text");
+    expect(matches.map(m => m.node.role)).toEqual([
+      "AXTextField",
+      "AXTextArea",
+      "AXSearchField",
+      "AXComboBox",
+    ]);
+  });
+
+  test("Input is no longer a text-control alias", () => {
+    expect(queryAX(textTree, "Input")).toHaveLength(0);
   });
 
   test("Window by tag", () => {
