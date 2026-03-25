@@ -17,7 +17,8 @@ describe("cli help rendering", () => {
 
     expect(help).toContain("gui - query and interact with the macOS GUI");
     expect(help).toContain("gui ca script -");
-    expect(help).toContain("gui ca highlight -");
+    expect(help).toContain("gui gfx <subcommand>");
+    expect(help).not.toContain("gui ca highlight -");
     expect(help).toContain("gui vat <subcommand>");
     expect(help).not.toContain("gui draw script -");
     expect(help).toContain("gui help [topic]");
@@ -32,6 +33,7 @@ describe("cli help rendering", () => {
     expect(help).toContain("gui help - command and skill reference");
     expect(help).toContain("gui help query");
     expect(help).toContain("gui help ca");
+    expect(help).toContain("gui help gfx");
     expect(help).not.toContain("gui help draw");
     expect(help).toContain("gui help rec");
     expect(help).toContain("gui help query-language");
@@ -123,9 +125,6 @@ describe("cli help rendering", () => {
     expect(help).toContain("\"kind\":\"rect\"");
     expect(help).toContain("\"kind\":\"xray\"");
     expect(help).toContain("`DrawScript = { coordinateSpace: \"screen\"; timeout?: number; items: Array<{ kind: \"rect\" | \"line\" | \"xray\"; ... }> }`");
-    expect(help).toContain("`AXCursor = { type: \"ax.cursor\"; target: AXTarget; selection?: { location: number; length: number } }`");
-    expect(help).toContain("`AXTarget = { type: \"ax.target\"; pid: number; point: { x: number; y: number }; role: string; bounds?: { x: number; y: number; width: number; height: number }; ... }`");
-    expect(help).toContain("`AXQueryMatch = { type: \"ax.query-match\"; pid: number; node: PlainNode; target?: AXTarget; targetError?: string }`");
     expect(help).toContain("\"timeout\":1200");
     expect(help).toContain("\"direction\":\"leftToRight\"");
     expect(help).toContain("\"animation\":{\"durMs\":650}");
@@ -136,11 +135,25 @@ describe("cli help rendering", () => {
     expect(help).toContain("timeout still controls the attached route lifetime");
     expect(help).toContain("Supports rect, line, and xray items");
     expect(help).toContain("gui ca script -");
-    expect(help).toContain("gui ca highlight [--timeout <ms>] -");
-    expect(help).toContain("gui ax query --only --app Terminal '@@{Button[subrole~=DecrementPage]}' | gui ca highlight -");
-    expect(help).toContain("defaults to a 1200ms overlay timeout");
+    expect(help).not.toContain("gui ca highlight [--timeout <ms>] -");
+    expect(help).not.toContain("gui ax query --only --app Terminal '@@{Button[subrole~=DecrementPage]}' | gui ca highlight -");
     expect(help).not.toContain("gui draw script -");
     expect(renderHelpTopic("draw")).toContain("Unknown help topic: draw");
+  });
+
+  test("gfx help documents the public visual annotation command family", () => {
+    const help = renderHelpTopic("gfx");
+
+    expect(help).toContain("gui gfx outline [--timeout <ms>] -");
+    expect(help).toContain("gui gfx scan [--timeout <ms>] -");
+    expect(help).toContain("gui gfx xray [--timeout <ms>] -");
+    expect(help).toContain("gui gfx spotlight [--timeout <ms>] -");
+    expect(help).toContain("gui gfx arrow [--timeout <ms>] -");
+    expect(help).toContain("gui gfx text [--timeout <ms>] \"<text>\" -");
+    expect(help).toContain("share the same target contract");
+    expect(help).toContain("Duplicate bounds are deduplicated");
+    expect(help).toContain("`gfx write` is intentionally not shipped.");
+    expect(help).not.toContain("gui gfx write");
   });
 
   test("resolves canonical help topics and rejects removed AX shorthand", () => {

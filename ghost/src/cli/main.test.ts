@@ -17,6 +17,11 @@ import {
   buildActorClickPassthroughRequest,
   buildActorMovePassthroughRequest,
   buildAXHighlightDrawScriptFromText,
+  buildGfxArrowDrawScriptFromText,
+  buildGfxOutlineDrawScriptFromText,
+  buildGfxSpotlightDrawScriptFromText,
+  buildGfxTextPlacementsFromText,
+  buildGfxXrayDrawScriptFromText,
   DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
   formatVatMountOutput,
   formatVatMountsOutput,
@@ -1218,6 +1223,144 @@ describe("ca highlight AX bridge", () => {
         },
       ],
     });
+  });
+
+  test("builds gfx outline draw scripts from AX payloads", () => {
+    expect(buildGfxOutlineDrawScriptFromText(JSON.stringify(target))).toEqual({
+      coordinateSpace: "screen",
+      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+      items: [
+        {
+          kind: "rect",
+          rect: { x: 100, y: 100, width: 80, height: 40 },
+        },
+      ],
+    });
+  });
+
+  test("builds gfx xray draw scripts from VAT fan-out payloads", () => {
+    const tree: PlainNode = {
+      _tag: "VATRoot",
+      _children: [
+        {
+          _tag: "Application",
+          _children: [
+            {
+              _tag: "Window",
+              frame: { x: 40, y: 50, width: 300, height: 200 },
+            },
+            {
+              _tag: "Window",
+              frame: { x: 400, y: 50, width: 320, height: 220 },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(buildGfxXrayDrawScriptFromText(formatVatQueryOutput(tree, "Window[frame]", false))).toEqual({
+      coordinateSpace: "screen",
+      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+      items: [
+        {
+          kind: "xray",
+          rect: { x: 40, y: 50, width: 300, height: 200 },
+          direction: "leftToRight",
+          animation: { durMs: 650, ease: "easeInOut" },
+        },
+        {
+          kind: "xray",
+          rect: { x: 400, y: 50, width: 320, height: 220 },
+          direction: "leftToRight",
+          animation: { durMs: 650, ease: "easeInOut" },
+        },
+      ],
+    });
+  });
+
+  test("builds gfx spotlight draw scripts with spotlight styling", () => {
+    const script = buildGfxSpotlightDrawScriptFromText(JSON.stringify(target));
+
+    expect(script.coordinateSpace).toBe("screen");
+    expect(script.timeout).toBe(DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
+    expect(script.items).toEqual([
+      {
+        kind: "rect",
+        rect: { x: 100, y: 100, width: 80, height: 40 },
+        style: {
+          stroke: "#FFD54F",
+          fill: "#FFD54F33",
+          lineWidth: 3,
+          cornerRadius: 14,
+          opacity: 1,
+        },
+      },
+    ]);
+  });
+
+  test("builds gfx arrow draw scripts with one shaft and two head lines per rect", () => {
+    const tree: PlainNode = {
+      _tag: "VATRoot",
+      _children: [
+        {
+          _tag: "Application",
+          _children: [
+            {
+              _tag: "Window",
+              frame: { x: 40, y: 50, width: 300, height: 200 },
+            },
+            {
+              _tag: "Window",
+              frame: { x: 400, y: 50, width: 320, height: 220 },
+            },
+          ],
+        },
+      ],
+    };
+
+    const script = buildGfxArrowDrawScriptFromText(formatVatQueryOutput(tree, "Window[frame]", false));
+
+    expect(script.coordinateSpace).toBe("screen");
+    expect(script.timeout).toBe(DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
+    expect(script.items).toHaveLength(6);
+    expect(script.items.every((item) => item.kind === "line")).toBe(true);
+  });
+
+  test("builds gfx text placements at the center of every resolved rect", () => {
+    const tree: PlainNode = {
+      _tag: "VATRoot",
+      _children: [
+        {
+          _tag: "Application",
+          _children: [
+            {
+              _tag: "Window",
+              frame: { x: 40, y: 50, width: 300, height: 200 },
+            },
+            {
+              _tag: "Window",
+              frame: { x: 400, y: 50, width: 320, height: 220 },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(buildGfxTextPlacementsFromText(formatVatQueryOutput(tree, "Window[frame]", false), "Review this")).toEqual([
+      {
+        point: { x: 190, y: 150 },
+        text: "Review this",
+      },
+      {
+        point: { x: 560, y: 160 },
+        text: "Review this",
+      },
+    ]);
+  });
+
+  test("rejects empty gfx text payloads", () => {
+    expect(() => buildGfxTextPlacementsFromText(JSON.stringify(target), "   "))
+      .toThrow("gui gfx text - text must be non-empty");
   });
 
   test("rejects VAT query payloads without bounds/frame coordinates", () => {
