@@ -1,5 +1,5 @@
 import { filterTree } from "../cli/filter.js";
-import { parseQuery } from "../cli/query.js";
+import { parseQuery, queryHasIntrospection } from "../cli/query.js";
 import type { QueryNode } from "../cli/types.js";
 import { normalizeVatMountPolicy } from "../vat/config.js";
 import {
@@ -49,12 +49,15 @@ export function handleVAT(
     }
     try {
       const queries = parseQuery(q);
-      const touchedPaths = collectTouchedQueryPaths(queries);
-      if (touchedPaths.length > 0) {
-        for (const path of touchedPaths) {
+      const activation = collectTouchedQueryPaths(q, queries);
+      const queryableMountPaths = new Set(registry.list().map((mount) => mount.path));
+      const targetedPaths = activation.paths.filter((path) => queryableMountPaths.has(path));
+
+      if (targetedPaths.length > 0) {
+        for (const path of targetedPaths) {
           registry.activatePath(path);
         }
-      } else {
+      } else if (!activation.hasMountTargetingSelector) {
         registry.activateQueryable();
       }
       const tree = registry.tree().tree;
@@ -81,29 +84,64 @@ export function handleVAT(
   return null;
 }
 
-function collectTouchedQueryPaths(queries: QueryNode[]): string[] {
-  const paths = new Set<string>();
+interface QueryActivationDiscovery {
+  paths: string[];
+  hasMountTargetingSelector: boolean;
+}
 
-  const visit = (node: QueryNode, chain: string[]) => {
-    if (node.tag !== "*" && node.tag !== "**") {
-      const segment = node.index !== undefined ? `${node.tag}[${node.index}]` : node.tag;
-      const nextChain = [...chain, segment];
-      paths.add(`/${nextChain.join("/")}`);
-      for (const child of node.children ?? []) {
-        visit(child, nextChain);
-      }
-      return;
+function collectTouchedQueryPaths(rawQuery: string, queries: QueryNode[]): QueryActivationDiscovery {
+  const paths = new Set<string>();
+  let hasRootIdSelector = false;
+  const hasCompactMountPathSyntax = isCompactMountPathQuery(rawQuery);
+
+  const visit = (node: QueryNode, chain: string[], isRoot: boolean): void => {
+    if (isRoot && node.id !== undefined && node.id !== "") {
+      hasRootIdSelector = true;
     }
+
+    const segment = collectQueryActivationSegment(node, isRoot);
+    const nextChain = segment !== undefined ? [...chain, segment] : chain;
+    if (segment !== undefined) {
+      paths.add(`/${nextChain.join("/")}`);
+    }
+
     for (const child of node.children ?? []) {
-      visit(child, chain);
+      visit(child, nextChain, false);
     }
   };
 
   for (const query of queries) {
-    visit(query, []);
+    visit(query, [], true);
   }
 
-  return [...paths].sort((a, b) => a.length - b.length || a.localeCompare(b));
+  return {
+    paths: [...paths].sort((a, b) => a.length - b.length || a.localeCompare(b)),
+    hasMountTargetingSelector: hasRootIdSelector || (hasCompactMountPathSyntax && queryHasIntrospection(queries)),
+  };
+}
+
+function isCompactMountPathQuery(rawQuery: string): boolean {
+  // VAT mount-path selectors are compact path forms like `Codex/Window[**]`.
+  // Relative structural queries in this route are written with whitespace or
+  // brace scopes, so we only treat slash chains with no whitespace around the
+  // operator as mount-targeting candidates.
+  return /[^\s]\/{1,2}[^\s]/.test(rawQuery);
+}
+
+function collectQueryActivationSegment(node: QueryNode, isRoot: boolean): string | undefined {
+  if (node.tag === "*" || node.tag === "**") {
+    if (isRoot && node.id !== undefined && node.id !== "") {
+      return node.id;
+    }
+    return undefined;
+  }
+  if (node.id !== undefined && node.id !== "") {
+    if (isRoot && (node.tag === "Application" || node.tag === "*")) {
+      return node.id;
+    }
+    return undefined;
+  }
+  return node.index !== undefined ? `${node.tag}[${node.index}]` : node.tag;
 }
 
 async function persistMounts(registry: VatRegistry, persist?: (mounts: VatPersistedMount[]) => Promise<void>): Promise<void> {

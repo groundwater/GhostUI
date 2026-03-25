@@ -24,6 +24,69 @@ function makeMockNativeAX(overrides: Partial<NativeAXApi> = {}): NativeAXApi {
   };
 }
 
+async function mountVatQueryActivationFixtures(): Promise<ReturnType<typeof createVatRegistry>> {
+  const registry = createVatRegistry({
+    drivers: new Map([
+      [
+        "codex",
+        () => ({
+          tree: {
+            _tag: "Codex",
+            _children: [
+              {
+                _tag: "Window",
+                _id: "Codex",
+                _children: [
+                  {
+                    _tag: "Button",
+                    _id: "Run",
+                    _children: [
+                      {
+                        _tag: "Glyph",
+                        _id: "Glyph:Run:0",
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      ],
+    ]),
+  });
+
+  await handleVAT(
+    new Request("http://localhost:7861/api/vat/mount", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        path: "/Codex",
+        driver: "codex",
+        args: [],
+        mountPolicy: { kind: "auto", unmountTimeout: { kind: "never" } },
+      }),
+    }),
+    registry,
+  );
+
+  await handleVAT(
+    new Request("http://localhost:7861/api/vat/mount", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        path: "/Other",
+        driver: "fixed",
+        args: ["other"],
+        mountPolicy: { kind: "auto", unmountTimeout: { kind: "never" } },
+      }),
+    }),
+    registry,
+  );
+
+  return registry;
+}
+
 afterEach(() => {
   __setNativeAXForTests();
 });
@@ -704,6 +767,174 @@ describe("VAT routes", () => {
     expect(keysOnlyWindow?._frame).toBe(true);
     expect(keysOnlyWindow?.title).toBeUndefined();
     expect(keysOnlyWindow?._children?.[0]?._frame).toBe("(100,120,80,28)");
+  });
+
+  test("vat queries activate all queryable mounts by default", async () => {
+    const registry = await mountVatQueryActivationFixtures();
+
+    const queryRes = await handleVAT(
+      new Request(`http://localhost:7861/api/vat/query?q=${encodeURIComponent("Window")}`),
+      registry,
+    );
+
+    expect(queryRes).not.toBeNull();
+    expect((queryRes as Response).status).toBe(200);
+    const queryBody = await (queryRes as Response).json();
+    expect(queryBody.matchCount).toBe(1);
+    expect(registry.list()).toMatchObject([
+      {
+        path: "/Codex",
+        active: true,
+      },
+      {
+        path: "/Other",
+        active: true,
+      },
+    ]);
+  });
+
+  test("vat queries with an explicit mount path only activate that mount", async () => {
+    const registry = await mountVatQueryActivationFixtures();
+
+    const queryRes = await handleVAT(
+      new Request(`http://localhost:7861/api/vat/query?q=${encodeURIComponent("Codex/Window[**]")}`),
+      registry,
+    );
+
+    expect(queryRes).not.toBeNull();
+    expect((queryRes as Response).status).toBe(200);
+    const queryBody = await (queryRes as Response).json();
+    expect(queryBody.matchCount).toBe(1);
+    expect(registry.list()).toMatchObject([
+      {
+        path: "/Codex",
+        active: true,
+      },
+      {
+        path: "/Other",
+        active: false,
+      },
+    ]);
+  });
+
+  test("vat queries with an unmatched explicit mount path do not activate mounts", async () => {
+    const registry = await mountVatQueryActivationFixtures();
+
+    const queryRes = await handleVAT(
+      new Request(`http://localhost:7861/api/vat/query?q=${encodeURIComponent("Missing/Window[**]")}`),
+      registry,
+    );
+
+    expect(queryRes).not.toBeNull();
+    expect((queryRes as Response).status).toBe(200);
+    const queryBody = await (queryRes as Response).json();
+    expect(queryBody.matchCount).toBe(0);
+    expect(registry.list()).toMatchObject([
+      {
+        path: "/Codex",
+        active: false,
+      },
+      {
+        path: "/Other",
+        active: false,
+      },
+    ]);
+  });
+
+  test("vat queries with direct-child syntax still broad-activate when mounts are inactive", async () => {
+    const registry = await mountVatQueryActivationFixtures();
+
+    const queryRes = await handleVAT(
+      new Request(`http://localhost:7861/api/vat/query?q=${encodeURIComponent("Window / Button")}`),
+      registry,
+    );
+
+    expect(queryRes).not.toBeNull();
+    expect((queryRes as Response).status).toBe(200);
+    const queryBody = await (queryRes as Response).json();
+    expect(queryBody.matchCount).toBe(1);
+    expect(registry.list()).toMatchObject([
+      {
+        path: "/Codex",
+        active: true,
+      },
+      {
+        path: "/Other",
+        active: true,
+      },
+    ]);
+  });
+
+  test("vat queries with nested descendant IDs still broad-activate when mounts are inactive", async () => {
+    const registry = await mountVatQueryActivationFixtures();
+
+    const queryRes = await handleVAT(
+      new Request(`http://localhost:7861/api/vat/query?q=${encodeURIComponent("Window { Button#Run }")}`),
+      registry,
+    );
+
+    expect(queryRes).not.toBeNull();
+    expect((queryRes as Response).status).toBe(200);
+    const queryBody = await (queryRes as Response).json();
+    expect(queryBody.matchCount).toBe(1);
+    expect(registry.list()).toMatchObject([
+      {
+        path: "/Codex",
+        active: true,
+      },
+      {
+        path: "/Other",
+        active: true,
+      },
+    ]);
+  });
+
+  test("vat queries with a root ID selector only activate that mount", async () => {
+    const registry = await mountVatQueryActivationFixtures();
+
+    const queryRes = await handleVAT(
+      new Request(`http://localhost:7861/api/vat/query?q=${encodeURIComponent("#Codex { Button }")}`),
+      registry,
+    );
+
+    expect(queryRes).not.toBeNull();
+    expect((queryRes as Response).status).toBe(200);
+    const queryBody = await (queryRes as Response).json();
+    expect(queryBody.matchCount).toBe(1);
+    expect(registry.list()).toMatchObject([
+      {
+        path: "/Codex",
+        active: true,
+      },
+      {
+        path: "/Other",
+        active: false,
+      },
+    ]);
+  });
+
+  test("vat queries with a mismatched ID selector do not activate mounts", async () => {
+    const registry = await mountVatQueryActivationFixtures();
+
+    const queryRes = await handleVAT(
+      new Request(`http://localhost:7861/api/vat/query?q=${encodeURIComponent("Window#Codex { Button }")}`),
+      registry,
+    );
+
+    expect(queryRes).not.toBeNull();
+    expect((queryRes as Response).status).toBe(200);
+    const queryBody = await (queryRes as Response).json();
+    expect(queryBody.matchCount).toBe(0);
+    expect(registry.list()).toMatchObject([
+      {
+        path: "/Codex",
+        active: false,
+      },
+      {
+        path: "/Other",
+        active: false,
+      },
+    ]);
   });
 
   test("updates mount policy and eagerly activates always mounts", async () => {
