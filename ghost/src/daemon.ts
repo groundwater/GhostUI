@@ -2360,6 +2360,9 @@ const server = Bun.serve({
     // CLI API (CRDT-based)
     const vatRes = handleVAT(req, vatRegistry, {
       persist: (mounts) => saveVatMountConfig(mounts, vatMountConfigPath),
+      triggerStreamRequestInit: auth.secret
+        ? { headers: { authorization: `Bearer ${auth.secret}` } }
+        : undefined,
     });
     if (vatRes) return vatRes;
 
