@@ -1,0 +1,35 @@
+.build/
+.swiftpm/
+*.xcodeproj
+DerivedData/
+.DS_Store
+.env
+*.iconset
+
+# macOS restore images
+*.ipsw
+*.aria2
+
+# Test files
+screenshot.png
+*.guiql
+!examples/*.guiql
+
+# Node / Bun
+node_modules/
+bun.lock
+ghost/dist/
+
+# Local scratch artifacts (captures, tree dumps, diffs, etc.)
+Local/
+
+# Test results (Playwright etc.)
+test-results/
+ghost/test-results/
+
+# Runtime logs
+daemon.log
+
+# Generated/runtime asset we do not want in git history
+ghost/src/assets/wallpaper.jpg
+ghost/native/build/
