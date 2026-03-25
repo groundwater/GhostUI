@@ -14,7 +14,7 @@ import { fetchRawAXTree, fetchAXCursor, fetchAXQueryMatches, axClickTarget, axPr
 import type { AXNode, AXCursor, AXEventFilter, AXTarget, AXQueryMatch, AXQueryScopeInput, AXScopePayload } from "./ax.js";
 import { axNodeAccessor } from "./accessor.js";
 import type { PlainNode } from "./types.js";
-import { isRetryableLogStreamError, tailLogStream } from "./log-stream.js";
+import { tailLogStream } from "./log-stream.js";
 import { findHelpTopic, findNearestHelpTopic, renderHelpIndex, renderHelpTopic, renderRootHelp, renderUnknownHelpTopic, renderUsage } from "./help.js";
 import { findSkillTarget, renderSkill, renderSkillList } from "./skills.js";
 import {
@@ -894,83 +894,58 @@ async function writeStdoutText(text: string): Promise<void> {
   });
 }
 
-function isRetryableVatWatchError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return isRetryableLogStreamError(err) || message.toLowerCase().includes("vat watch stream ended unexpectedly");
-}
-
 async function tailVatWatchStream(
   watchArgs: VatWatchCLIArgs,
   tty: boolean,
   writer: (chunk: string) => Promise<void> = writeStdoutText,
-  stderr: Pick<NodeJS.WriteStream, "write"> = process.stderr,
-  reconnectDelayMs = 500,
 ): Promise<void> {
-  let announcedReconnect = false;
+  const res = await openVatWatchStream(watchArgs.query, {
+    once: watchArgs.once,
+    filter: watchArgs.filter,
+  });
+
+  if (!res.body) {
+    throw new Error("vat watch stream missing response body");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let receivedPayload = false;
+
+  const emitLine = async (line: string): Promise<void> => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+    receivedPayload = true;
+    if (!tty) {
+      await writer(trimmed + "\n");
+      return;
+    }
+    await writer(`${formatVatWatchEventText(parseVatWatchEventLine(trimmed))}\n`);
+  };
 
   while (true) {
-    try {
-      const res = await openVatWatchStream(watchArgs.query, {
-        once: watchArgs.once,
-        filter: watchArgs.filter,
-      });
-      announcedReconnect = false;
-
-      if (!res.body) {
-        throw new Error("vat watch stream missing response body");
+    const { value, done } = await reader.read();
+    if (done) {
+      if (buffer.trim().length > 0) {
+        await emitLine(buffer);
+        buffer = "";
       }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let receivedPayload = false;
-
-      const emitLine = async (line: string): Promise<void> => {
-        const trimmed = line.trim();
-        if (!trimmed) {
-          return;
-        }
-        receivedPayload = true;
-        if (!tty) {
-          await writer(trimmed + "\n");
-          return;
-        }
-        await writer(`${formatVatWatchEventText(parseVatWatchEventLine(trimmed))}\n`);
-      };
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) {
-          if (buffer.trim().length > 0) {
-            await emitLine(buffer);
-            buffer = "";
-          }
-          if (watchArgs.once && receivedPayload) {
-            return;
-          }
-          throw new Error("vat watch stream ended unexpectedly");
-        }
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          await emitLine(line);
-          if (watchArgs.once && receivedPayload) {
-            return;
-          }
-        }
+      if (watchArgs.once && receivedPayload) {
+        return;
       }
-    } catch (err: unknown) {
-      if (!isRetryableVatWatchError(err)) {
-        throw err;
+      throw new Error("vat watch stream ended unexpectedly");
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      await emitLine(line);
+      if (watchArgs.once && receivedPayload) {
+        return;
       }
-
-      if (!announcedReconnect) {
-        stderr.write("vat watch disconnected; reconnecting...\n");
-        announcedReconnect = true;
-      }
-
-      await Bun.sleep(reconnectDelayMs);
     }
   }
 }

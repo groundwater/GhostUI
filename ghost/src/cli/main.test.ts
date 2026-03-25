@@ -68,8 +68,6 @@ type TailVatWatchStream = (
   watchArgs: { query: string; once: boolean; filter?: Array<"added" | "removed" | "updated"> },
   tty: boolean,
   writer?: (chunk: string) => Promise<void>,
-  stderr?: Pick<NodeJS.WriteStream, "write">,
-  reconnectDelayMs?: number,
 ) => Promise<void>;
 
 function streamFromChunks(chunks: string[]): ReadableStream<Uint8Array> {
@@ -655,16 +653,36 @@ describe("vat watch stream framing", () => {
     expect(outputs).toEqual([`${line}\n`]);
   });
 
-  test("emits multiple events from one chunk before reconnect failure", async () => {
+  test("emits multiple events from one chunk then fails hard on stream close", async () => {
     const tailVatWatchStream = await loadTailVatWatchStreamForTests();
     const outputs: string[] = [];
-    const stderrChunks: string[] = [];
     const first = JSON.stringify({ source: "vat.watch", seq: 1 });
     const second = JSON.stringify({ source: "vat.watch", seq: 2 });
 
     await withMockedFetchSequence(
+      [new Response(streamFromChunks([`${first}\n${second}\n`]))],
+      async () => {
+        await expect(
+          tailVatWatchStream(
+            { query: "Window", once: false },
+            false,
+            async (chunk) => {
+              outputs.push(chunk);
+            },
+          ),
+        ).rejects.toThrow("vat watch stream ended unexpectedly");
+      },
+    );
+
+    expect(outputs).toEqual([`${first}\n`, `${second}\n`]);
+  });
+
+  test("fails immediately when opening the watch stream returns an error", async () => {
+    const tailVatWatchStream = await loadTailVatWatchStreamForTests();
+    const outputs: string[] = [];
+
+    await withMockedFetchSequence(
       [
-        new Response(streamFromChunks([`${first}\n${second}\n`])),
         new Response(JSON.stringify({ error: "boom" }), {
           status: 500,
           headers: { "content-type": "application/json" },
@@ -678,20 +696,12 @@ describe("vat watch stream framing", () => {
             async (chunk) => {
               outputs.push(chunk);
             },
-            {
-              write(chunk) {
-                stderrChunks.push(String(chunk));
-                return true;
-              },
-            },
-            0,
           ),
         ).rejects.toThrow("/api/vat/watch failed (500): boom");
       },
     );
 
-    expect(outputs).toEqual([`${first}\n`, `${second}\n`]);
-    expect(stderrChunks).toEqual(["vat watch disconnected; reconnecting...\n"]);
+    expect(outputs).toEqual([]);
   });
 
   test("flushes a trailing partial line when the stream closes", async () => {
