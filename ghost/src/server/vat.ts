@@ -1,6 +1,6 @@
 import { materializeSelectedMatches, selectForestMatchesWithCardinality } from "../cli/filter.js";
 import { buildCLICompositionPayloadFromVatQueryResult } from "../cli/payload.js";
-import { parseQuery, queryHasIntrospection } from "../cli/query.js";
+import { parseQuery } from "../cli/query.js";
 import type { PlainNode } from "../cli/types.js";
 import type { QueryNode } from "../cli/types.js";
 import type { AXObserverEvent } from "../a11y/native-ax.js";
@@ -18,7 +18,8 @@ import type { VatRegistry } from "../vat/registry.js";
 
 interface VatRouteOptions {
   persist?: (mounts: VatPersistedMount[]) => Promise<void>;
-  openTriggerStream?: () => Promise<Response>;
+  openTriggerStream?: (init?: RequestInit) => Promise<Response>;
+  triggerStreamRequestInit?: RequestInit;
 }
 
 type VatWatchChangeKind = "added" | "removed" | "updated";
@@ -113,19 +114,12 @@ function handleQuery(url: URL, registry: VatRegistry): Response {
 
 interface QueryActivationDiscovery {
   paths: string[];
-  hasMountTargetingSelector: boolean;
 }
 
-function collectTouchedQueryPaths(rawQuery: string, queries: QueryNode[]): QueryActivationDiscovery {
+function collectTouchedQueryPaths(queries: QueryNode[]): QueryActivationDiscovery {
   const paths = new Set<string>();
-  let hasRootIdSelector = false;
-  const hasCompactMountPathSyntax = isCompactMountPathQuery(rawQuery);
 
   const visit = (node: QueryNode, chain: string[], isRoot: boolean): void => {
-    if (isRoot && node.id !== undefined && node.id !== "") {
-      hasRootIdSelector = true;
-    }
-
     const segment = collectQueryActivationSegment(node, isRoot);
     const nextChain = segment !== undefined ? [...chain, segment] : chain;
     if (segment !== undefined) {
@@ -143,13 +137,12 @@ function collectTouchedQueryPaths(rawQuery: string, queries: QueryNode[]): Query
 
   return {
     paths: [...paths].sort((a, b) => a.length - b.length || a.localeCompare(b)),
-    hasMountTargetingSelector: hasRootIdSelector || (hasCompactMountPathSyntax && queryHasIntrospection(queries)),
   };
 }
 
 function executeVatQuery(q: string, registry: VatRegistry): VatQuerySnapshot {
   const queries = parseQuery(q);
-  const activation = collectTouchedQueryPaths(q, queries);
+  const activation = collectTouchedQueryPaths(queries);
   const queryableMountPaths = new Set(registry.list().map((mount) => mount.path));
   const targetedPaths = activation.paths.filter((path) => queryableMountPaths.has(path));
 
@@ -157,7 +150,7 @@ function executeVatQuery(q: string, registry: VatRegistry): VatQuerySnapshot {
     for (const path of targetedPaths) {
       registry.activatePath(path);
     }
-  } else if (!activation.hasMountTargetingSelector) {
+  } else {
     registry.activateQueryable();
   }
 
@@ -234,7 +227,7 @@ function nodeIdentityKey(node: PlainNode): string | null {
     } else {
       segments.push(current._tag);
     }
-    const children = current._children;
+    const children: PlainNode[] | undefined = current._children;
     if (!children || children.length !== 1) {
       break;
     }
@@ -345,20 +338,8 @@ function diffQuerySnapshots(previous: VatQuerySnapshot, current: VatQuerySnapsho
   return changes;
 }
 
-function isRetryableWatchStreamError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  const lower = message.toLowerCase();
-  return (
-    lower.includes("socket connection was closed unexpectedly")
-    || lower.includes("econnreset")
-    || lower.includes("connection reset")
-    || lower.includes("broken pipe")
-    || lower.includes("watch trigger stream ended unexpectedly")
-  );
-}
-
-async function openDefaultWatchTriggerStream(): Promise<Response> {
-  const response = await fetch("http://localhost:7861/api/raw/events?follow=1");
+async function openDefaultWatchTriggerStream(init?: RequestInit): Promise<Response> {
+  const response = await fetch("http://localhost:7861/api/raw/events?follow=1", init);
   if (!response.ok) {
     throw new Error(`/api/raw/events failed (${response.status}): ${await response.text()}`);
   }
@@ -480,49 +461,43 @@ function handleWatch(
       req.signal.addEventListener("abort", close, { once: true });
 
       void (async () => {
-        while (!closed) {
-          try {
-            const response = await openTriggerStream();
-            if (!response.body) {
-              throw new Error("watch trigger stream missing response body");
-            }
-            reader = response.body.getReader();
-            buffer = "";
-            while (!closed) {
-              const { value, done } = await reader.read();
-              if (done) {
-                throw new Error("watch trigger stream ended unexpectedly");
-              }
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split("\n");
-              buffer = lines.pop() ?? "";
-              for (const line of lines) {
-                const trimmed = line.trim();
-                if (!trimmed) {
-                  continue;
-                }
-                let raw: unknown;
-                try {
-                  raw = JSON.parse(trimmed);
-                } catch {
-                  continue;
-                }
-                processTrigger(parseAXObserverEvent(raw));
-                if (closed) {
-                  return;
-                }
-              }
-            }
-          } catch (error: unknown) {
-            if (closed) {
-              return;
-            }
-            if (!isRetryableWatchStreamError(error)) {
-              fail(error);
-              return;
-            }
-            await Bun.sleep(200);
+        try {
+          const response = await openTriggerStream(options.triggerStreamRequestInit);
+          if (!response.body) {
+            throw new Error("watch trigger stream missing response body");
           }
+          reader = response.body.getReader();
+          buffer = "";
+          while (!closed) {
+            const { value, done } = await reader.read();
+            if (done) {
+              throw new Error("watch trigger stream ended unexpectedly");
+            }
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed) {
+                continue;
+              }
+              let raw: unknown;
+              try {
+                raw = JSON.parse(trimmed);
+              } catch {
+                continue;
+              }
+              processTrigger(parseAXObserverEvent(raw));
+              if (closed) {
+                return;
+              }
+            }
+          }
+        } catch (error: unknown) {
+          if (closed) {
+            return;
+          }
+          fail(error);
         }
       })();
     },
@@ -538,25 +513,16 @@ function handleWatch(
   });
 }
 
-function isCompactMountPathQuery(rawQuery: string): boolean {
-  // VAT mount-path selectors are compact path forms like `Codex/Window[**]`.
-  // Relative structural queries in this route are written with whitespace or
-  // brace scopes, so we only treat slash chains with no whitespace around the
-  // operator as mount-targeting candidates.
-  return /[^\s]\/{1,2}[^\s]/.test(rawQuery);
-}
-
 function collectQueryActivationSegment(node: QueryNode, isRoot: boolean): string | undefined {
-  if (node.tag === "*" || node.tag === "**") {
-    if (isRoot && node.id !== undefined && node.id !== "") {
+  if (node.id !== undefined && node.id !== "") {
+    // Root id selectors target mount names even when the query narrows the
+    // matched node tag inside the mounted tree.
+    if (isRoot) {
       return node.id;
     }
     return undefined;
   }
-  if (node.id !== undefined && node.id !== "") {
-    if (isRoot && (node.tag === "Application" || node.tag === "*")) {
-      return node.id;
-    }
+  if (node.tag === "*" || node.tag === "**") {
     return undefined;
   }
   return node.index !== undefined ? `${node.tag}[${node.index}]` : node.tag;

@@ -817,7 +817,7 @@ describe("VAT routes", () => {
     ]);
   });
 
-  test("vat queries with an unmatched explicit mount path do not activate mounts", async () => {
+  test("vat queries with an unmatched explicit mount path broad-activate all queryable mounts", async () => {
     const registry = await mountVatQueryActivationFixtures();
 
     const queryRes = await handleVAT(
@@ -832,11 +832,11 @@ describe("VAT routes", () => {
     expect(registry.list()).toMatchObject([
       {
         path: "/Codex",
-        active: false,
+        active: true,
       },
       {
         path: "/Other",
-        active: false,
+        active: true,
       },
     ]);
   });
@@ -913,7 +913,7 @@ describe("VAT routes", () => {
     ]);
   });
 
-  test("vat queries with a mismatched ID selector do not activate mounts", async () => {
+  test("vat queries with a root tag and ID selector activate the matching mount", async () => {
     const registry = await mountVatQueryActivationFixtures();
 
     const queryRes = await handleVAT(
@@ -924,16 +924,105 @@ describe("VAT routes", () => {
     expect(queryRes).not.toBeNull();
     expect((queryRes as Response).status).toBe(200);
     const queryBody = await (queryRes as Response).json();
-    expect(queryBody.matchCount).toBe(0);
+    expect(queryBody.matchCount).toBe(1);
     expect(registry.list()).toMatchObject([
       {
         path: "/Codex",
-        active: false,
+        active: true,
       },
       {
         path: "/Other",
         active: false,
       },
+    ]);
+  });
+
+  test("bare typed root-id query activates the matching auto mount on first query", async () => {
+    const registry = await mountVatQueryActivationFixtures();
+
+    // Both mounts start inactive (auto policy).
+    expect(registry.list()).toMatchObject([
+      { path: "/Codex", active: false },
+      { path: "/Other", active: false },
+    ]);
+
+    const queryRes = await handleVAT(
+      new Request(`http://localhost:7861/api/vat/query?q=${encodeURIComponent("Window#Codex")}`),
+      registry,
+    );
+
+    expect(queryRes).not.toBeNull();
+    expect((queryRes as Response).status).toBe(200);
+    const queryBody = await (queryRes as Response).json();
+    expect(queryBody.matchCount).toBe(1);
+    expect(registry.list()).toMatchObject([
+      {
+        path: "/Codex",
+        active: true,
+      },
+      {
+        path: "/Other",
+        active: false,
+      },
+    ]);
+  });
+
+  test("bare typed root-id query with no matching mount broad-activates all queryable mounts", async () => {
+    const registry = await mountVatQueryActivationFixtures();
+
+    const queryRes = await handleVAT(
+      new Request(`http://localhost:7861/api/vat/query?q=${encodeURIComponent("Window#Missing")}`),
+      registry,
+    );
+
+    expect(queryRes).not.toBeNull();
+    expect((queryRes as Response).status).toBe(200);
+    const queryBody = await (queryRes as Response).json();
+    expect(queryBody.matchCount).toBe(0);
+    expect(registry.list()).toMatchObject([
+      { path: "/Codex", active: true },
+      { path: "/Other", active: true },
+    ]);
+  });
+
+  test("ambiguous typed root-id query broad-activates instead of silently missing", async () => {
+    // Button#Run looks path-targeted enough to infer /Run, but /Run is not a
+    // concrete mount path. We must broad-activate so the query can still match
+    // the Button inside /Codex.
+    const registry = await mountVatQueryActivationFixtures();
+
+    const queryRes = await handleVAT(
+      new Request(`http://localhost:7861/api/vat/query?q=${encodeURIComponent("Button#Run")}`),
+      registry,
+    );
+
+    expect(queryRes).not.toBeNull();
+    expect((queryRes as Response).status).toBe(200);
+    const queryBody = await (queryRes as Response).json();
+    expect(queryBody.matchCount).toBe(1);
+    expect(registry.list()).toMatchObject([
+      { path: "/Codex", active: true },
+      { path: "/Other", active: true },
+    ]);
+  });
+
+  test("compact path query with no matching mount prefix broad-activates", async () => {
+    // Foo/Bar/Baz has compact-path structure but no mount at /Foo, so targeted
+    // resolution yields nothing and we fall back to broad activation.
+    const registry = await mountVatQueryActivationFixtures();
+
+    const queryRes = await handleVAT(
+      new Request(`http://localhost:7861/api/vat/query?q=${encodeURIComponent("Foo/Bar/Baz")}`),
+      registry,
+    );
+
+    expect(queryRes).not.toBeNull();
+    expect((queryRes as Response).status).toBe(200);
+    const queryBody = await (queryRes as Response).json();
+    expect(queryBody.matchCount).toBe(0);
+    expect(registry.list()).toMatchObject([
+      { path: "/Codex", active: true },
+      { path: "/Other", active: true },
     ]);
   });
 
@@ -1328,5 +1417,126 @@ describe("VAT routes", () => {
     expect(summary).toEqual({ added: 0, removed: 0, updated: 1, total: 1 });
     expect(changes).toHaveLength(1);
     expect(changes[0]).toMatchObject({ kind: "updated", index: 0 });
+  });
+
+  test("vat watch passes daemon auth headers to the internal trigger stream fetch", async () => {
+    let snapshotVersion = 0;
+    let observedAuthorization: string | null = null;
+    const registry = createVatRegistry({
+      drivers: new Map([
+        [
+          "watched",
+          () => ({
+            tree: {
+              _tag: "App",
+              _children: [
+                {
+                  _tag: "Window",
+                  title: snapshotVersion === 0 ? "v1" : "v2",
+                },
+              ],
+            },
+            observedPids: [400],
+          }),
+        ],
+      ]),
+    });
+
+    await handleVAT(
+      new Request("http://localhost:7861/api/vat/mount", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: "/App",
+          driver: "watched",
+          args: [],
+          mountPolicy: { kind: "always" },
+        }),
+      }),
+      registry,
+    );
+
+    const encoder = new TextEncoder();
+    const watchRes = await handleVAT(
+      new Request("http://localhost:7861/api/vat/watch?q=Window&once=1"),
+      registry,
+      {
+        triggerStreamRequestInit: {
+          headers: { authorization: "Bearer top-secret" },
+        },
+        openTriggerStream: async (init?: RequestInit) => {
+          observedAuthorization = new Headers(init?.headers).get("authorization");
+          return new Response(new ReadableStream<Uint8Array>({
+            start(controller) {
+              snapshotVersion = 1;
+              controller.enqueue(encoder.encode(JSON.stringify({
+                type: "window-updated",
+                pid: 400,
+              }) + "\n"));
+            },
+          }));
+        },
+      },
+    );
+
+    expect(watchRes).not.toBeNull();
+    expect((watchRes as Response).status).toBe(200);
+    if (observedAuthorization == null) {
+      throw new Error("expected auth header to be forwarded");
+    }
+    if (observedAuthorization !== "Bearer top-secret") {
+      throw new Error(`expected forwarded auth header, got ${observedAuthorization}`);
+    }
+    const lines = (await (watchRes as Response).text()).trim().split("\n");
+    expect(lines).toHaveLength(1);
+    const payload = JSON.parse(lines[0]) as Record<string, unknown>;
+    expect(payload.changeSummary).toEqual({ added: 0, removed: 0, updated: 1, total: 1 });
+  });
+
+  test("vat watch fails hard when the trigger stream disconnects", async () => {
+    const registry = createVatRegistry({
+      drivers: new Map([
+        [
+          "watched",
+          () => ({
+            tree: {
+              _tag: "App",
+              _children: [{ _tag: "Window", title: "stable" }],
+            },
+            observedPids: [401],
+          }),
+        ],
+      ]),
+    });
+
+    await handleVAT(
+      new Request("http://localhost:7861/api/vat/mount", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: "/App",
+          driver: "watched",
+          args: [],
+          mountPolicy: { kind: "always" },
+        }),
+      }),
+      registry,
+    );
+
+    const watchRes = await handleVAT(
+      new Request("http://localhost:7861/api/vat/watch?q=Window"),
+      registry,
+      {
+        openTriggerStream: async () => new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close();
+          },
+        })),
+      },
+    );
+
+    expect(watchRes).not.toBeNull();
+    expect((watchRes as Response).status).toBe(200);
+    await expect((watchRes as Response).text()).rejects.toThrow("watch trigger stream ended unexpectedly");
   });
 });
