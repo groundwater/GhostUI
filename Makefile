@@ -1,0 +1,85 @@
+.PHONY: help generate release debug clean icon native
+
+-include .env
+export
+
+XCODEGEN ?= xcodegen
+XCODEBUILD ?= xcodebuild
+SCHEME ?= GhostUIApp
+PROJECT = GhostUI.xcodeproj
+DERIVED_DATA = .build/xcode
+DEBUG_APP = $(DERIVED_DATA)/Build/Products/Debug/GhostUI.app
+RELEASE_APP = $(DERIVED_DATA)/Build/Products/Release/GhostUI.app
+
+# Icon generation
+ICON_SOURCE = macOS/GhostUI/Resources/Icon/GhostUIIcon-final.png
+ICON_ICONSET = macOS/GhostUI/Resources/Icon/GhostUI.iconset
+ICON_OUTPUT = macOS/GhostUI/Resources/AppIcon.icns
+
+help:
+	@echo "Usage: make <target>"
+	@echo ""
+	@echo "Targets:"
+	@echo "  generate  Generate GhostUI.xcodeproj from project.yml"
+	@echo "  release   Build GhostUI (release)"
+	@echo "  debug     Build GhostUI (debug)"
+	@echo "  native    Build N-API accessibility module"
+	@echo "  icon      Generate AppIcon.icns from source PNG"
+	@echo "  clean     Remove build artifacts"
+	@echo ""
+	@echo "Variables:"
+	@echo "  XCODEGEN    xcodegen executable (default: xcodegen)"
+	@echo "  XCODEBUILD  xcodebuild executable (default: xcodebuild)"
+
+icon:
+ifeq ($(SKIP_ICON),1)
+	@echo "Skipping icon generation (SKIP_ICON=1)"
+	@exit 0
+endif
+	@echo "Generating AppIcon.icns from source..."
+	@xattr -rc $(ICON_ICONSET) 2>/dev/null || true
+	@rm -rf $(ICON_ICONSET) 2>/dev/null || true
+	@mkdir -p $(ICON_ICONSET)
+	@sips -z 16 16     $(ICON_SOURCE) --out $(ICON_ICONSET)/icon_16x16.png >/dev/null 2>&1
+	@sips -z 32 32     $(ICON_SOURCE) --out $(ICON_ICONSET)/icon_16x16@2x.png >/dev/null 2>&1
+	@sips -z 32 32     $(ICON_SOURCE) --out $(ICON_ICONSET)/icon_32x32.png >/dev/null 2>&1
+	@sips -z 64 64     $(ICON_SOURCE) --out $(ICON_ICONSET)/icon_32x32@2x.png >/dev/null 2>&1
+	@sips -z 128 128   $(ICON_SOURCE) --out $(ICON_ICONSET)/icon_128x128.png >/dev/null 2>&1
+	@sips -z 256 256   $(ICON_SOURCE) --out $(ICON_ICONSET)/icon_128x128@2x.png >/dev/null 2>&1
+	@sips -z 256 256   $(ICON_SOURCE) --out $(ICON_ICONSET)/icon_256x256.png >/dev/null 2>&1
+	@sips -z 512 512   $(ICON_SOURCE) --out $(ICON_ICONSET)/icon_256x256@2x.png >/dev/null 2>&1
+	@sips -z 512 512   $(ICON_SOURCE) --out $(ICON_ICONSET)/icon_512x512.png >/dev/null 2>&1
+	@sips -z 1024 1024 $(ICON_SOURCE) --out $(ICON_ICONSET)/icon_512x512@2x.png >/dev/null 2>&1
+	@iconutil -c icns $(ICON_ICONSET) -o $(ICON_OUTPUT) || ( \
+		echo "iconutil failed; keeping existing AppIcon.icns if present"; \
+		test -f $(ICON_OUTPUT); \
+	)
+	@rm -rf $(ICON_ICONSET)
+	@echo "✓ AppIcon.icns generated successfully"
+
+generate:
+	$(XCODEGEN) generate
+
+native:
+	@echo "Installing ghost dependencies..."
+	cd ghost && bun install
+	@echo "Building display UI bundle..."
+	cd ghost && bun run build:display-ui
+	@echo "Building N-API accessibility module..."
+	cd ghost/native && npm install --ignore-scripts
+	mkdir -p ghost/native/build/Release/.deps/Release/obj.target/ghostui_ax
+	cd ghost/native && npm run build
+	@echo "N-API module built: ghost/native/build/Release/ghostui_ax.node"
+
+release: icon generate
+	$(XCODEBUILD) -project $(PROJECT) -scheme $(SCHEME) -configuration Release -destination 'generic/platform=macOS' -allowProvisioningUpdates -allowProvisioningDeviceRegistration -derivedDataPath $(DERIVED_DATA) build
+	rm -rf .build/GhostUI.app
+	ditto $(RELEASE_APP) .build/GhostUI.app
+
+debug: icon generate
+	$(XCODEBUILD) -project $(PROJECT) -scheme $(SCHEME) -configuration Debug -destination 'generic/platform=macOS' -allowProvisioningUpdates -allowProvisioningDeviceRegistration -derivedDataPath $(DERIVED_DATA) build
+	rm -rf .build/GhostUI.app
+	ditto $(DEBUG_APP) .build/GhostUI.app
+
+clean:
+	rm -rf .build/ GhostUI.xcodeproj

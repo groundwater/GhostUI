@@ -1,0 +1,36 @@
+/* Terminal.app styles */
+
+/* Terminal text area — monospace, dark background */
+.app-com-apple-terminal .n-textarea {
+  font-family: "SF Mono", "Menlo", "Monaco", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  background: #1e1e1e;
+  color: #cccccc;
+  padding: 4px 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: auto;
+  flex: 1;
+}
+
+/* Focused pane gets a subtle highlight border */
+.app-com-apple-terminal .n-textarea[data-focused="true"] {
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.4);
+}
+
+/* Tab bar styling */
+.app-com-apple-terminal .n-tabview > .n-tab-bar {
+  background: #2d2d2d;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+/* Split panes fill available space */
+.app-com-apple-terminal .n-split {
+  flex: 1;
+}
+
+/* Titlebar */
+.app-com-apple-terminal .n-titlebar {
+  background: #3a3a3a;
+}

@@ -1,0 +1,39 @@
+@font-face {
+  font-family: "seti";
+  font-display: block;
+  src: url("/assets/icons/seti/seti.woff2") format("woff2");
+}
+
+.seti {
+  font-family: "seti";
+  font-style: normal;
+  font-weight: normal;
+  font-size: 16px;
+  line-height: 1;
+  display: inline-block;
+  text-decoration: none;
+  text-rendering: auto;
+  text-align: center;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  width: 16px;
+  height: 16px;
+}
+
+/* File type icons */
+.seti-typescript::before { content: '\E09A'; color: #519aba; }
+.seti-javascript::before { content: '\E052'; color: #cbcb41; }
+.seti-json::before { content: '\E056'; color: #cbcb41; }
+.seti-html::before { content: '\E049'; color: #e37933; }
+.seti-css::before { content: '\E01D'; color: #519aba; }
+.seti-markdown::before { content: '\E061'; color: #519aba; }
+.seti-python::before { content: '\E07C'; color: #519aba; }
+.seti-go::before { content: '\E03A'; color: #519aba; }
+.seti-rust::before { content: '\E083'; color: #dea584; }
+.seti-svg::before { content: '\E092'; color: #f1e05a; }
+.seti-image::before { content: '\E04D'; color: #a074c4; }
+.seti-folder::before { content: '\E033'; color: #c09553; }
+.seti-git::before { content: '\E035'; color: #cc3e44; }
+.seti-makefile::before { content: '\E060'; color: #e37933; }
+.seti-config::before { content: '\E019'; color: #6d8086; }
+.seti-default::before { content: '\E023'; color: #6d8086; }

@@ -1,0 +1,13 @@
+{
+  "name": "@ghostui/native-ax",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "node-addon-api": "^8.0.0",
+    "node-gyp": "^10.0.0"
+  },
+  "scripts": {
+    "build": "node-gyp rebuild",
+    "clean": "node-gyp clean"
+  }
+}

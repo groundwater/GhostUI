@@ -1,0 +1,78 @@
+name: GhostUI
+options:
+  minimumXcodeGenVersion: 2.45.3
+  createIntermediateGroups: true
+settings:
+  base:
+    SDKROOT: macosx
+    MACOSX_DEPLOYMENT_TARGET: 14.0
+    SWIFT_VERSION: 5.9
+    DEVELOPMENT_TEAM: 3FGZQE8AW3
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: Apple Development
+    ENABLE_HARDENED_RUNTIME: NO
+    GHOSTUI_KEYCHAIN_ACCESS_GROUP: $(AppIdentifierPrefix)org.ghostvm.GhostUI.shared
+targets:
+  GhostUICLI:
+    type: application
+    platform: macOS
+    supportedDestinations:
+      - macOS
+    sources:
+      - path: macOS/GhostUI/CLIHelper
+      - path: macOS/GhostUI/Services/DaemonAuthService.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.ghostvm.GhostUI.gui
+        PRODUCT_NAME: GhostUICLI
+        EXECUTABLE_NAME: gui
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: macOS/GhostUI/CLIHelper/Info.plist
+        CODE_SIGN_ENTITLEMENTS: macOS/GhostUI/Resources/gui.entitlements
+        SKIP_INSTALL: NO
+        OTHER_LDFLAGS:
+          - "$(inherited)"
+          - "-framework"
+          - "Security"
+    postBuildScripts:
+      - name: Bundle CLI Runtime
+        path: macOS/GhostUI/BuildScripts/bundle_cli_runtime.sh
+        shell: /bin/bash
+  GhostUI:
+    type: application
+    platform: macOS
+    supportedDestinations:
+      - macOS
+    sources:
+      - path: macOS/GhostUI
+        excludes:
+          - CLIHelper
+          - BuildScripts
+          - Resources
+      - path: macOS/GhostUI/Resources/AppIcon.icns
+        buildPhase: resources
+    dependencies:
+      - target: GhostUICLI
+        embed: false
+        link: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.ghostvm.GhostUI
+        PRODUCT_NAME: GhostUI
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: macOS/GhostUI/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: macOS/GhostUI/Resources/GhostUI.entitlements
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/../Frameworks"
+    postBuildScripts:
+      - name: Bundle Ghost Runtime
+        path: macOS/GhostUI/BuildScripts/bundle_app_runtime.sh
+        shell: /bin/bash
+schemes:
+  GhostUIApp:
+    build:
+      parallelizeBuild: false
+      targets:
+        GhostUICLI: all
+        GhostUI: all
