@@ -1681,6 +1681,19 @@ export function buildGfxTextPlacementsFromText(
   }));
 }
 
+export function buildGfxScanOverlayRequestFromText(
+  input: string,
+  durationMs = DEFAULT_GFX_SCAN_DURATION_MS,
+): {
+  rects: CLICompositionRect[];
+  durationMs: number;
+} {
+  return {
+    rects: resolveGfxRectsFromText(input, "gui gfx scan -"),
+    durationMs,
+  };
+}
+
 async function runGfxTextFromText(
   input: string,
   text: string,
@@ -1709,7 +1722,8 @@ async function runGfxScanFromText(
   input: string,
   durationMs = DEFAULT_GFX_SCAN_DURATION_MS,
 ): Promise<void> {
-  await postScanOverlay(resolveGfxRectsFromText(input, "gui gfx scan -"), durationMs);
+  const request = buildGfxScanOverlayRequestFromText(input, durationMs);
+  await postScanOverlay(request.rects, request.durationMs);
 }
 
 function parseGfxTimeout(

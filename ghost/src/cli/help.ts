@@ -108,7 +108,8 @@ const HELP_TOPICS: HelpTopic[] = [
     ],
     notes: [
       "Reads exactly one AX/VAT target-bearing JSON payload from stdin.",
-      "`outline`, `scan`, `xray`, `spotlight`, and `arrow` share the same target contract: VAT query payloads expand over every bounds-bearing descendant in deterministic traversal order, while AX payloads render once from their single target bounds.",
+      "`outline`, `xray`, `spotlight`, and `arrow` share the same target contract: VAT query payloads expand over every bounds-bearing descendant in deterministic traversal order, while AX payloads render once from their single target bounds.",
+      "`scan` resolves the same AX/VAT bounds but only drives the red scan-line overlay; it does not add outline/highlight rects.",
       "`gfx text` uses the same target contract and renders the supplied text at each resolved bounds center.",
       AX_TARGET_BEARING_JSON_TYPE_NOTE,
       "`scan` defaults to 500ms. The other `gfx` commands default to 1200ms. Override either with --timeout <ms>.",

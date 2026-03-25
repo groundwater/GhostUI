@@ -19,6 +19,7 @@ import {
   buildAXHighlightDrawScriptFromText,
   buildGfxArrowDrawScriptFromText,
   buildGfxOutlineDrawScriptFromText,
+  buildGfxScanOverlayRequestFromText,
   buildGfxSpotlightDrawScriptFromText,
   buildGfxTextPlacementsFromText,
   buildGfxXrayDrawScriptFromText,
@@ -1356,6 +1357,35 @@ describe("ca highlight AX bridge", () => {
         text: "Review this",
       },
     ]);
+  });
+
+  test("builds gfx scan overlay requests without outline rects", () => {
+    const tree: PlainNode = {
+      _tag: "VATRoot",
+      _children: [
+        {
+          _tag: "Application",
+          _children: [
+            {
+              _tag: "Window",
+              frame: { x: 40, y: 50, width: 300, height: 200 },
+            },
+            {
+              _tag: "Window",
+              frame: { x: 400, y: 50, width: 320, height: 220 },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(buildGfxScanOverlayRequestFromText(formatVatQueryOutput(tree, "Window[frame]", false), 750)).toEqual({
+      rects: [
+        { x: 40, y: 50, width: 300, height: 200 },
+        { x: 400, y: 50, width: 320, height: 220 },
+      ],
+      durationMs: 750,
+    });
   });
 
   test("rejects empty gfx text payloads", () => {

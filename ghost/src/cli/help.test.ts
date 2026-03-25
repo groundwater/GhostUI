@@ -151,6 +151,7 @@ describe("cli help rendering", () => {
     expect(help).toContain("gui gfx arrow [--timeout <ms>] -");
     expect(help).toContain("gui gfx text [--timeout <ms>] \"<text>\" -");
     expect(help).toContain("share the same target contract");
+    expect(help).toContain("only drives the red scan-line overlay");
     expect(help).toContain("Duplicate bounds are deduplicated");
     expect(help).toContain("`gfx write` is intentionally not shipped.");
     expect(help).not.toContain("gui gfx write");
