@@ -111,7 +111,7 @@ const VALID_STIMS = new Set<string>(["tab", "enter", "type", "drag", "click"]);
 function parseArgs(argv: string[]): Options {
   const defaultGui = resolve(
     import.meta.dir,
-    "../../../.build/GhostUI.app/Contents/MacOS/gui",
+    "../../../../.build/GhostUI.app/Contents/MacOS/gui",
   );
   const opts: Options = {
     guiPath: defaultGui,

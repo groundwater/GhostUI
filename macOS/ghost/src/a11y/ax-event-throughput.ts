@@ -13,6 +13,7 @@
  */
 
 import { spawn } from "bun";
+import { resolve } from "node:path";
 
 // ── CLI flags ──────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -22,7 +23,7 @@ function flag(name: string, fallback: string): string {
   return i >= 0 && i + 1 < args.length ? args[i + 1] : fallback;
 }
 
-const GUI = flag("gui", ".build/GhostUI.app/Contents/MacOS/gui");
+const GUI = flag("gui", resolve(import.meta.dir, "../../../../.build/GhostUI.app/Contents/MacOS/gui"));
 const DURATION_S = Number(flag("duration", "5"));
 const STIM_KEY = flag("stim", "");          // e.g. "tab", "space"
 const STIM_N = Number(flag("n", "10"));

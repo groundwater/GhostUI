@@ -7,7 +7,7 @@
 GhostUI is a macOS GUI automation system with two runtime pieces:
 
 - A Swift app in `macOS/GhostUI/` that captures accessibility data and handles local UI/input surfaces.
-- A Bun/TypeScript daemon in `ghost/src/` that maintains the live CRDT document and serves the display UI.
+- A Bun/TypeScript daemon in `macOS/ghost/src/` that maintains the live CRDT document and serves the display UI.
 
 ## Build
 
@@ -29,7 +29,7 @@ open .build/GhostUI.app
 Run the daemon separately when you want the browser display:
 
 ```bash
-cd ghost
+cd macOS/ghost
 bun run src/daemon.ts
 ```
 
@@ -38,11 +38,11 @@ Open the display UI at `http://localhost:7861/display/0`.
 ## Repo Layout
 
 - `macOS/GhostUI/` - Swift app, overlays, services, and resources.
-- `ghost/src/` - daemon, CRDT, CLI, app adapters, and display UI source.
-- `Tests/GhostUITests/` - focused Swift tests for overlay and app behavior.
-- `Package.swift` - Swift package definition for builds and tests.
+- `macOS/ghost/` - daemon runtime, native module, and display UI source.
+- `Package.swift` - Swift package definition for app builds.
 
 ## Notes
 
 - The canonical icon source is `macOS/GhostUI/Resources/Icon/GhostUIIcon-final.png`.
 - The app bundle is built as `.build/GhostUI.app` from this repo root.
+- Runtime resources are bundled into `GhostUI.app/Contents/Resources/ghost/`.

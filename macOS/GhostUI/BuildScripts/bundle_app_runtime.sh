@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="${PROJECT_DIR}"
 BUN="${HOME}/.bun/bin/bun"
-GHOST_DIR="${ROOT}/ghost"
+GHOST_DIR="${ROOT}/macOS/ghost"
 NATIVE_DIR="${GHOST_DIR}/native"
 APP="${TARGET_BUILD_DIR}/${WRAPPER_NAME}"
 HELPERS="${APP}/Contents/Helpers"

@@ -160,7 +160,7 @@ export function shouldLogNativeAXLoad(): boolean {
 // ── N-API module loading ──
 
 const nativeModulePaths = [
-  // Running from source (bun ghost/src/daemon.ts)
+  // Running from source (bun macOS/ghost/src/daemon.ts)
   resolve(import.meta.dir, "../../native/build/Release/ghostui_ax.node"),
   resolve(import.meta.dir, "../../../native/build/Release/ghostui_ax.node"),
   // Running from helper-local compiled binary inside GhostUICLI.app.

@@ -775,7 +775,7 @@ try {
 
 // Load fixture JSON if available (for development without GhostUI app)
 import { existsSync, readFileSync } from "fs";
-const FIXTURE_PATH = resolve(import.meta.dir, "..", "..", "ghost-fixture.json");
+const FIXTURE_PATH = resolve(import.meta.dir, "..", "..", "..", "ghost-fixture.json");
 const FIXTURE_ALT = "/tmp/ghostui-crdt-tree.json";
 
 for (const fp of [FIXTURE_PATH, FIXTURE_ALT]) {
@@ -1065,8 +1065,8 @@ async function serveIcon(name: string): Promise<Response> {
     }
 
     // Also check .build directory for dev apps like GhostUI
-    // import.meta.dir = ghost/src → ghost → GhostUI (project root)
-    const devPath = `${resolve(import.meta.dir, "..", "..", ".build")}/${name}.app`;
+    // import.meta.dir = macOS/ghost/src → macOS/ghost → GhostUI (project root)
+    const devPath = `${resolve(import.meta.dir, "..", "..", "..", ".build")}/${name}.app`;
     if (await Bun.file(`${devPath}/Contents/Info.plist`).exists()) {
       if (await extractIconViaAppKit(devPath, tmpPng)) {
         await runCmd(["sips", "-Z", "64", tmpPng]);

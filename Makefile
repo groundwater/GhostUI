@@ -62,14 +62,14 @@ generate:
 
 native:
 	@echo "Installing ghost dependencies..."
-	cd ghost && bun install
+	cd macOS/ghost && bun install
 	@echo "Building display UI bundle..."
-	cd ghost && bun run build:display-ui
+	cd macOS/ghost && bun run build:display-ui
 	@echo "Building N-API accessibility module..."
-	cd ghost/native && npm install --ignore-scripts
-	mkdir -p ghost/native/build/Release/.deps/Release/obj.target/ghostui_ax
-	cd ghost/native && npm run build
-	@echo "N-API module built: ghost/native/build/Release/ghostui_ax.node"
+	cd macOS/ghost/native && npm install --ignore-scripts
+	mkdir -p macOS/ghost/native/build/Release/.deps/Release/obj.target/ghostui_ax
+	cd macOS/ghost/native && npm run build
+	@echo "N-API module built: macOS/ghost/native/build/Release/ghostui_ax.node"
 
 release: icon generate
 	$(XCODEBUILD) -project $(PROJECT) -scheme $(SCHEME) -configuration Release -destination 'generic/platform=macOS' -allowProvisioningUpdates -allowProvisioningDeviceRegistration -derivedDataPath $(DERIVED_DATA) build

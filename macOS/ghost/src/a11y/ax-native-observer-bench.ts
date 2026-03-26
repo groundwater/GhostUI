@@ -30,7 +30,7 @@ function loadNativeModule(): NativeBenchApi {
     resolve(import.meta.dir, "../../native/build/Release/ghostui_ax.node"),
     resolve(import.meta.dir, "../../../native/build/Release/ghostui_ax.node"),
     resolve(process.execPath, "../Frameworks/ghostui_ax.node"),
-    resolve(import.meta.dir, "../../../.build/GhostUI.app/Contents/Resources/ghost/native/build/Release/ghostui_ax.node"),
+    resolve(import.meta.dir, "../../../../.build/GhostUI.app/Contents/Resources/ghost/native/build/Release/ghostui_ax.node"),
     resolve(process.execPath, "../../Resources/ghost/native/build/Release/ghostui_ax.node"),
   ];
 

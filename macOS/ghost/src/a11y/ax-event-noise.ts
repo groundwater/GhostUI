@@ -39,13 +39,13 @@ function usage(): never {
     "Examples:",
     "  bun run src/a11y/ax-event-noise.ts --mode tab --repeat 100",
     "  bun run src/a11y/ax-event-noise.ts --mode type --text hello --repeat 20",
-    "  bun run src/a11y/ax-event-noise.ts --stimulus '.build/GhostUI.app/Contents/MacOS/gui cg key tab' --repeat 100",
+    "  bun run src/a11y/ax-event-noise.ts --stimulus '../../.build/GhostUI.app/Contents/MacOS/gui cg key tab' --repeat 100",
   ].join("\n"));
   process.exit(1);
 }
 
 function parseArgs(argv: string[]): Options {
-  const defaultGui = resolve(import.meta.dir, "../../../.build/GhostUI.app/Contents/MacOS/gui");
+  const defaultGui = resolve(import.meta.dir, "../../../../.build/GhostUI.app/Contents/MacOS/gui");
   const options: Options = {
     guiPath: defaultGui,
     durationMs: 2000,
