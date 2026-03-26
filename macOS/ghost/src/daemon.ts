@@ -759,6 +759,7 @@ const actorRuntime = new ActorRuntime({
     nativeAX.axPostOverlay(kind, payload);
   },
   getDisplays: () => getDisplays(),
+  getMousePosition: () => nativeAX?.cgGetMousePosition?.() ?? null,
 });
 
 const store = new CRDTStore();

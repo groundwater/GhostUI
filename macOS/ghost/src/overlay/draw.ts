@@ -91,6 +91,7 @@ export interface DrawSpotlightItem {
   remove?: boolean;
   rects?: DrawRect[];
   style?: DrawSpotlightStyle;
+  animation?: DrawRectAnimation;
 }
 
 export type DrawMarkerShape = "rect" | "circ" | "check" | "cross" | "underline";
@@ -177,6 +178,7 @@ interface DrawSpotlightItemInput {
   remove?: unknown;
   rects?: unknown;
   style?: unknown;
+  animation?: unknown;
 }
 
 interface DrawMarkerItemInput {
@@ -220,6 +222,11 @@ const DEFAULT_SPOTLIGHT_STYLE: DrawSpotlightStyle = {
   fill: "#000000B8",
   cornerRadius: 18,
   opacity: 1,
+};
+
+const DEFAULT_SPOTLIGHT_ANIMATION: DrawRectAnimation = {
+  durMs: 200,
+  ease: "easeInOut",
 };
 
 const CSS_HEX_COLOR_RE = /^#(?:[0-9A-Fa-f]{3,4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
@@ -650,6 +657,11 @@ function normalizeSpotlightItem(value: unknown, index: number): DrawSpotlightIte
     remove,
     rects,
     style: remove ? undefined : normalizeSpotlightStyle(item.style, `items[${index}].style`),
+    animation: remove
+      ? undefined
+      : (item.animation !== undefined
+        ? normalizeRectAnimation(item.animation, `items[${index}].animation`)
+        : { ...DEFAULT_SPOTLIGHT_ANIMATION }),
   };
 }
 

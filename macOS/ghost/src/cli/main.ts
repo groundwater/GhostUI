@@ -21,6 +21,7 @@ import {
   buildCLICompositionPayloadFromAXQueryMatch,
   buildCLICompositionPayloadFromVatQueryResult,
   normalizeCLICompositionPayload,
+  readFirstJSONFrame,
   parseCLICompositionPayloadStream,
   type CLICompositionRect,
   requireCLICompositionBounds,
@@ -34,6 +35,7 @@ import { axTargetFromPoint, isAXTarget } from "../a11y/ax-target.js";
 import {
   ACTOR_CLICK_PASSTHROUGH_DELAY_MS,
   ActorApiError,
+  type ActorType,
   parseActorRunCLIArgs,
   parseActorSpawnCLIArgs,
   type PointerButton,
@@ -196,6 +198,19 @@ export function resolveCRDTSubcommandAlias(subcommand: string | undefined): stri
   return subcommand === "q" ? "query" : subcommand;
 }
 
+const ACTOR_RUN_ACTION_NAMES = new Set([
+  "move",
+  "click",
+  "drag",
+  "scroll",
+  "think",
+  "narrate",
+  "draw",
+  "text",
+  "clear",
+  "dismiss",
+]);
+
 const command = resolveCommandAlias(args[0]);
 const preservesLocalAppFlag = command === "ax" && (args[1] === "query" || args[1] === "bench-observers");
 
@@ -241,17 +256,76 @@ function failUsage(topic: string, detail?: string): never {
   process.exit(1);
 }
 
-export function renderActorRunUsage(nameHint?: string): string {
-  const usage = renderUsage("actor run");
-  if (!nameHint) return usage;
-  return usage.replaceAll("<name>.", `${nameHint}.`);
+export function renderActorRunUsage(nameHint?: string, actorType?: ActorType): string {
+  if (actorType === "canvas") {
+    return renderCanvasActorRunUsage(nameHint);
+  }
+  if (nameHint === undefined) {
+    return renderUsage("actor run");
+  }
+  return renderUsage("actor run").replaceAll("<name>.", `${nameHint}.`);
 }
 
-function failActorRunUsage(nameHint?: string, detail?: string): never {
+function renderCanvasActorRunUsage(nameHint?: string): string {
+  const name = nameHint ?? "<name>";
+  return [
+    "Usage:",
+    `  gui actor run ${name}.draw <rect|circ|check|cross|underline> [--padding <pixels>] [--size <points>] [--color <css-color>] [--box <x y width height> | -]`,
+    `  gui actor run ${name}.text <Text> [--font <name>] [--size <pt>] [--color <css-color>] [--highlight <css-color|none>] [--box <x y width height> | -]`,
+    `  gui actor run ${name}.clear`,
+  ].join("\n");
+}
+
+async function resolveActorTypeByName(name: string): Promise<ActorType | undefined> {
+  try {
+    const response = await listActors();
+    return response.actors.find((actor) => actor.name === name)?.type;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function resolveActorRunInvocation(
+  target: string,
+  actionArgs: string[],
+  actorType?: ActorType,
+): Promise<{ name: string; actionName?: string }> {
+  if (actorType) {
+    return { name: target };
+  }
+
+  const splitAt = target.lastIndexOf(".");
+  if (splitAt <= 0 || splitAt === target.length - 1) {
+    return { name: target };
+  }
+
+  const actionName = target.slice(splitAt + 1);
+  if (!ACTOR_RUN_ACTION_NAMES.has(actionName)) {
+    return { name: target };
+  }
+
+  const baseName = target.slice(0, splitAt);
+  return {
+    name: baseName,
+    actionName,
+  };
+}
+
+async function failActorRunUsageForName(name: string, detail?: string): Promise<never> {
   if (detail) {
     console.error(detail);
   }
-  console.error(renderActorRunUsage(nameHint));
+  const actorType = await resolveActorTypeByName(name);
+  console.error(renderActorRunUsage(name, actorType));
+  process.exit(1);
+}
+
+function failActorRunUsage(nameHint?: string, detail?: string): never {
+  const usage = renderUsage("actor run");
+  if (detail) {
+    console.error(detail);
+  }
+  console.error(nameHint ? usage.replaceAll("<name>.", `${nameHint}.`) : usage);
   process.exit(1);
 }
 
@@ -1191,6 +1265,48 @@ export function emitPassthroughStdout(
   }
 }
 
+function waitForDelayOrAbort(delayMs: number, signal?: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve(false);
+      return;
+    }
+
+    const onAbort = () => {
+      cleanup();
+      resolve(false);
+    };
+
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve(true);
+    }, delayMs);
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+export async function emitPassthroughStdoutAfterDelay(
+  raw: string,
+  stdoutIsTTY: boolean | undefined,
+  delayMs = DEFAULT_GFX_SPOTLIGHT_REVEAL_MS,
+  signal?: AbortSignal,
+  writer: (chunk: string) => void = chunk => process.stdout.write(chunk),
+): Promise<void> {
+  if (!shouldEmitPassthroughStdout(stdoutIsTTY)) {
+    return;
+  }
+  if (!(await waitForDelayOrAbort(delayMs, signal))) {
+    return;
+  }
+  writer(raw);
+}
+
 async function runActorClickPassthrough(name: string, args: string[]): Promise<void> {
   const input = parseSingleAXTargetPassthroughInput(await readStdinText("actor run click"), "actor run click");
   const request = buildActorClickPassthroughRequest(args, input.target);
@@ -1579,14 +1695,25 @@ function buildOutlineItems(rects: CLICompositionRect[]): DrawScript["items"] {
   }));
 }
 
-function buildSpotlightItems(rects: CLICompositionRect[]): DrawScript["items"] {
+const DEFAULT_GFX_SPOTLIGHT_COLOR = "rgba(0,0,0,.5)";
+const DEFAULT_GFX_SPOTLIGHT_REVEAL_MS = 200;
+
+function buildSpotlightItems(
+  rects: CLICompositionRect[],
+  color = DEFAULT_GFX_SPOTLIGHT_COLOR,
+  revealDurationMs = DEFAULT_GFX_SPOTLIGHT_REVEAL_MS,
+): DrawScript["items"] {
   return [{
     kind: "spotlight" as const,
     rects,
     style: {
-      fill: "#000000B8",
+      fill: color,
       cornerRadius: 18,
       opacity: 1,
+    },
+    animation: {
+      durMs: revealDurationMs,
+      ease: "easeInOut" as const,
     },
   }];
 }
@@ -1598,6 +1725,11 @@ export interface GfxArrowOptions {
   durationMs: number;
   target: GfxArrowTarget;
   from?: { x: number; y: number };
+}
+
+export interface GfxSpotlightOptions {
+  color: string;
+  durationMs: number;
 }
 
 function arrowTargetPoint(rect: CLICompositionRect, target: GfxArrowTarget): { x: number; y: number } {
@@ -1750,12 +1882,24 @@ export function buildGfxXrayDrawScriptFromText(
   };
 }
 
+export function buildGfxSpotlightDrawScriptFromText(input: string, durationMs?: number): DrawScript;
 export function buildGfxSpotlightDrawScriptFromText(
   input: string,
-  durationMs = DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+  options?: Partial<GfxSpotlightOptions>,
+): DrawScript;
+export function buildGfxSpotlightDrawScriptFromText(
+  input: string,
+  optionsOrDuration: Partial<GfxSpotlightOptions> | number = {},
 ): DrawScript {
+  const options = typeof optionsOrDuration === "number"
+    ? { durationMs: optionsOrDuration }
+    : optionsOrDuration;
   const rects = resolveGfxRectsFromText(input, "gui gfx spotlight -");
-  return buildGfxDrawScript(rects, buildSpotlightItems(rects), durationMs);
+  return buildGfxDrawScript(
+    rects,
+    buildSpotlightItems(rects, options.color ?? DEFAULT_GFX_SPOTLIGHT_COLOR),
+    options.durationMs ?? DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+  );
 }
 
 export function buildGfxArrowDrawScriptFromText(
@@ -1986,6 +2130,41 @@ export function parseGfxDuration(
   return durationMs;
 }
 
+export function parseGfxSpotlightOptions(
+  argv: string[],
+  usageTopic: string,
+): GfxSpotlightOptions {
+  let color = DEFAULT_GFX_SPOTLIGHT_COLOR;
+  let durationMs = DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS;
+
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (token === "--color") {
+      const raw = argv[index + 1];
+      if (!raw) {
+        failUsage(usageTopic, "--color requires a CSS color like #RGB[A], #RRGGBB[AA], rgb(...), or rgba(...).");
+      }
+      color = parseGfxColor(raw, `${usageTopic} --color`);
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+    if (token === "--duration") {
+      const raw = argv[index + 1];
+      const parsed = Number(raw);
+      if (!raw || !Number.isFinite(parsed) || parsed <= 0) {
+        failUsage(usageTopic, "--duration requires a positive number of milliseconds.");
+      }
+      durationMs = parsed;
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+  }
+
+  return { color, durationMs };
+}
+
 export function parseGfxArrowOptions(
   argv: string[],
   usageTopic: string,
@@ -2079,7 +2258,14 @@ export function parseGfxArrowOptions(
   return { color, size, length, durationMs, target, from };
 }
 
-async function attachDrawOverlay(payload: DrawScript): Promise<void> {
+interface AttachDrawOverlayOptions {
+  onAttached?: (signal: AbortSignal) => void | Promise<void>;
+}
+
+export async function attachDrawOverlay(
+  payload: DrawScript,
+  options: AttachDrawOverlayOptions = {},
+): Promise<void> {
   const drawAbort = new AbortController();
   const onAbort = () => {
     if (!drawAbort.signal.aborted) {
@@ -2091,7 +2277,9 @@ async function attachDrawOverlay(payload: DrawScript): Promise<void> {
   process.once("SIGTERM", onAbort);
   try {
     const res = await postDrawOverlay(payload, drawAbort.signal);
-    await waitForDrawOverlayAttachment(res, drawAbort.signal);
+    await waitForDrawOverlayAttachment(res, drawAbort.signal, {
+      onAttached: options.onAttached,
+    });
   } catch (error: unknown) {
     if (!drawAbort.signal.aborted) {
       throw error;
@@ -2370,7 +2558,7 @@ async function main() {
             if (gfxArgs.length !== 1 || gfxArgs[0] !== "-") {
               failUsage("gfx outline");
             }
-            const input = await readStdinText("gfx outline");
+            const input = await readFirstJSONFrame(Bun.stdin.stream());
             await attachDrawOverlay(buildGfxOutlineDrawScriptFromText(input));
             emitPassthroughStdout(input, process.stdout.isTTY);
             break;
@@ -2380,19 +2568,28 @@ async function main() {
             if (gfxArgs.length !== 1 || gfxArgs[0] !== "-") {
               failUsage("gfx xray");
             }
-            const input = await readStdinText("gfx xray");
+            const input = await readFirstJSONFrame(Bun.stdin.stream());
             await attachDrawOverlay(buildGfxXrayDrawScriptFromText(input, durationMs));
             emitPassthroughStdout(input, process.stdout.isTTY);
             break;
           }
           case "spotlight": {
-            const durationMs = parseGfxDuration(gfxArgs, "gfx spotlight", DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
+            const spotlightOptions = parseGfxSpotlightOptions(gfxArgs, "gfx spotlight");
             if (gfxArgs.length !== 1 || gfxArgs[0] !== "-") {
               failUsage("gfx spotlight");
             }
-            const input = await readStdinText("gfx spotlight");
-            await attachDrawOverlay(buildGfxSpotlightDrawScriptFromText(input, durationMs));
-            emitPassthroughStdout(input, process.stdout.isTTY);
+            const input = await readFirstJSONFrame(Bun.stdin.stream());
+            const spotlightPayload = buildGfxSpotlightDrawScriptFromText(input, spotlightOptions);
+            const spotlightItem = spotlightPayload.items.find(item => item.kind === "spotlight");
+            const revealDurationMs = spotlightItem?.animation?.durMs ?? DEFAULT_GFX_SPOTLIGHT_REVEAL_MS;
+            await attachDrawOverlay(spotlightPayload, {
+              onAttached: (signal) => emitPassthroughStdoutAfterDelay(
+                input,
+                process.stdout.isTTY,
+                revealDurationMs,
+                signal,
+              ),
+            });
             break;
           }
           case "arrow": {
@@ -2400,7 +2597,7 @@ async function main() {
             if (gfxArgs.length !== 1 || gfxArgs[0] !== "-") {
               failUsage("gfx arrow");
             }
-            const input = await readStdinText("gfx arrow");
+            const input = await readFirstJSONFrame(Bun.stdin.stream());
             await attachDrawOverlay(buildGfxArrowDrawScriptFromText(input, arrowOptions));
             emitPassthroughStdout(input, process.stdout.isTTY);
             break;
@@ -2415,7 +2612,7 @@ async function main() {
               if (gfxArgs.length !== 0) {
                 failUsage("gfx draw");
               }
-              const input = await readStdinText("gfx draw");
+              const input = await readFirstJSONFrame(Bun.stdin.stream());
               await attachDrawOverlay(buildGfxMarkerDrawScriptFromText(input, shape, markerOptions));
               emitPassthroughStdout(input, process.stdout.isTTY);
               break;
@@ -2435,7 +2632,7 @@ async function main() {
             if (gfxArgs.length !== 1 || gfxArgs[0] !== "-") {
               failUsage("gfx scan");
             }
-            const input = await readStdinText("gfx scan");
+            const input = await readFirstJSONFrame(Bun.stdin.stream());
             await runGfxScanFromText(input, durationMs);
             emitPassthroughStdout(input, process.stdout.isTTY);
             break;
@@ -2566,13 +2763,11 @@ async function main() {
           if (!target) {
             failUsage("actor run");
           }
-          const splitAt = target.lastIndexOf(".");
-          if (splitAt <= 0 || splitAt === target.length - 1) {
-            failActorRunUsage(target, "Expected <name>.<action>.");
-          }
-          name = target.slice(0, splitAt);
-          actionName = target.slice(splitAt + 1);
+          const knownActorType = await resolveActorTypeByName(target);
           actionArgs = actorArgs.slice(2);
+          const resolved = await resolveActorRunInvocation(target, actionArgs, knownActorType);
+          name = resolved.name;
+          actionName = resolved.actionName;
         } else {
           // Hidden compatibility shim: gui actor <name> run <action> ...
           // and gui actor <name> kill
@@ -2601,7 +2796,7 @@ async function main() {
 
         if (subcommand === "run") {
           if (!actionName) {
-            failActorRunUsage(name);
+            await failActorRunUsageForName(name);
           }
           try {
             if (actionName === "click" && actionArgs.includes("-")) {
@@ -2612,7 +2807,12 @@ async function main() {
               await runActorMovePassthrough(name, actionArgs);
               break;
             }
-            const request = parseActorRunCLIArgs(actionName!, actionArgs);
+            const stdinText = actionName === "draw" || actionName === "text"
+              ? actionArgs.includes("-")
+                ? await readStdinText(`actor run ${actionName}`)
+                : ""
+              : "";
+            const request = parseActorRunCLIArgs(actionName!, actionArgs, stdinText);
             console.log(JSON.stringify(await runActor(name, request.action, request.timeoutMs), null, 2));
           } catch (error) {
             if (error instanceof ActorApiError) {

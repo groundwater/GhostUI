@@ -1,6 +1,6 @@
 import type { PlainNode } from "./types.js";
 import type { DrawScript } from "../overlay/draw.js";
-import type { ActorAction, ActorListEntry } from "../actors/protocol.js";
+import type { ActorAction, ActorListEntry, ActorType } from "../actors/protocol.js";
 import type { RecFilmstripRequest, RecImageRequest } from "../rec/protocol.js";
 import type { VatMountPolicy, VatMountRequest, VatMountResponse, VatMountSummary, VatPersistedMount, VatPolicyResponse, VatTreeResponse, VatUnmountResponse } from "../vat/types.js";
 import { existsSync } from "fs";
@@ -407,10 +407,10 @@ export async function dragWindow(
 }
 
 export async function spawnActor(
-  type: "pointer",
+  type: ActorType,
   name: string,
   durationScale?: number,
-): Promise<{ ok: true; name: string; type: string; durationScale: number }> {
+): Promise<{ ok: true; name: string; type: ActorType; durationScale: number }> {
   const body: Record<string, unknown> = { type, name };
   if (durationScale !== undefined) body.durationScale = durationScale;
   const res = await daemonFetch(`${BASE}/api/actors/spawn`, {
@@ -422,7 +422,7 @@ export async function spawnActor(
   if (!res.ok) {
     throw new Error(`/api/actors/spawn failed (${res.status}): ${text}`);
   }
-  return JSON.parse(text) as { ok: true; name: string; type: string; durationScale: number };
+  return JSON.parse(text) as { ok: true; name: string; type: ActorType; durationScale: number };
 }
 
 export async function killActor(name: string): Promise<{ ok: true; name: string; killed: true }> {

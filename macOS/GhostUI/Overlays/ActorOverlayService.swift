@@ -11,18 +11,40 @@ private struct ActorOverlayPoint: Decodable {
     }
 }
 
+private struct ActorOverlayRect: Decodable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+
+    var cgRect: CGRect {
+        CGRect(x: x, y: y, width: width, height: height)
+    }
+}
+
 private struct ActorOverlayPayload: Decodable {
     let op: String
     let name: String
     let type: String?
     let position: ActorOverlayPoint?
     let to: ActorOverlayPoint?
+    let rect: ActorOverlayRect?
+    let box: ActorOverlayRect?
     let durationMs: Double?
     let style: String?
     let button: String?
     let dx: Double?
     let dy: Double?
     let text: String?
+    let shape: String?
+    let font: String?
+    let size: Double?
+    let color: String?
+    let highlight: String?
+    let padding: Double?
+    let roughness: Double?
+    let opacity: Double?
+    let id: String?
 }
 
 private final class PointerActorLayer {
@@ -85,12 +107,80 @@ private final class PointerActorLayer {
     }
 }
 
+private final class CanvasActorLayer {
+    let name: String
+    let container = CALayer()
+    var markerLayersByKey: [String: CAShapeLayer] = [:]
+    var textLayersByKey: [String: CanvasTextItemLayer] = [:]
+    private var nextGeneratedItemIndex: Int = 0
+
+    init(name: String) {
+        self.name = name
+        container.masksToBounds = false
+        container.opacity = 1
+        container.isHidden = false
+    }
+
+    func nextItemKey(prefix: String) -> String {
+        defer { nextGeneratedItemIndex += 1 }
+        return "\(name).\(prefix).\(nextGeneratedItemIndex)"
+    }
+
+    func clearItems() {
+        for layer in markerLayersByKey.values {
+            layer.removeAllAnimations()
+            layer.removeFromSuperlayer()
+        }
+        for item in textLayersByKey.values {
+            item.removeAllAnimations()
+            item.container.removeFromSuperlayer()
+        }
+        markerLayersByKey.removeAll()
+        textLayersByKey.removeAll()
+        nextGeneratedItemIndex = 0
+    }
+}
+
+private final class CanvasTextItemLayer {
+    let container = CALayer()
+    let background = CALayer()
+    let label = CATextLayer()
+
+    init() {
+        container.masksToBounds = false
+        container.opacity = 0
+
+        background.masksToBounds = true
+        background.cornerRadius = 10
+        background.backgroundColor = NSColor.clear.cgColor
+        background.shadowColor = NSColor.black.cgColor
+        background.shadowOpacity = 0.0
+        background.shadowRadius = 8
+        background.shadowOffset = CGSize(width: 0, height: -1)
+
+        label.alignmentMode = .left
+        label.isWrapped = true
+        label.truncationMode = .end
+        label.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+
+        container.addSublayer(background)
+        container.addSublayer(label)
+    }
+
+    func removeAllAnimations() {
+        container.removeAllAnimations()
+        background.removeAllAnimations()
+        label.removeAllAnimations()
+    }
+}
+
 /// Retained overlay renderer for daemon-owned visual actors.
 final class ActorOverlayService {
     static let shared = ActorOverlayService()
     private init() {}
 
     private var actorsByName: [String: PointerActorLayer] = [:]
+    private var canvasActorsByName: [String: CanvasActorLayer] = [:]
 
     func handle(jsonData: Data) {
         DispatchQueue.main.async { [weak self] in
@@ -105,6 +195,11 @@ final class ActorOverlayService {
 
     private func apply(_ payload: ActorOverlayPayload) {
         guard let root = OverlayWindowManager.shared.ensureRootLayer() else { return }
+
+        if isCanvasPayload(payload) {
+            applyCanvas(payload, root: root)
+            return
+        }
 
         switch payload.op {
         case "spawn":
@@ -166,6 +261,11 @@ final class ActorOverlayService {
             actor.cancelCleanup()
             actor.container.removeAllAnimations()
             actor.container.removeFromSuperlayer()
+            if let canvasActor = canvasActorsByName.removeValue(forKey: payload.name) {
+                clearCanvas(canvasActor)
+                canvasActor.container.removeAllAnimations()
+                canvasActor.container.removeFromSuperlayer()
+            }
         default:
             break
         }
@@ -196,6 +296,162 @@ final class ActorOverlayService {
         return actor
     }
 
+    private func isCanvasPayload(_ payload: ActorOverlayPayload) -> Bool {
+        let type = payload.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if type == "canvas" {
+            return true
+        }
+        return payload.op.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("canvas.")
+    }
+
+    private func canvasOp(_ payload: ActorOverlayPayload) -> String {
+        let raw = payload.op.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if raw.hasPrefix("canvas.") {
+            return String(raw.dropFirst("canvas.".count))
+        }
+        return raw
+    }
+
+    private func applyCanvas(_ payload: ActorOverlayPayload, root: CALayer) {
+        switch canvasOp(payload) {
+        case "spawn", "show":
+            _ = ensureCanvasActor(named: payload.name, root: root)
+        case "draw":
+            guard let actor = ensureCanvasActor(named: payload.name, root: root) else { return }
+            applyCanvasDraw(actor, root: root, payload: payload)
+        case "text":
+            guard let actor = ensureCanvasActor(named: payload.name, root: root) else { return }
+            applyCanvasText(actor, root: root, payload: payload)
+        case "clear":
+            guard let actor = canvasActor(named: payload.name, root: root) else { return }
+            clearCanvas(actor)
+        case "kill":
+            guard let actor = canvasActorsByName.removeValue(forKey: payload.name) else { return }
+            clearCanvas(actor)
+            actor.container.removeAllAnimations()
+            actor.container.removeFromSuperlayer()
+        default:
+            break
+        }
+    }
+
+    private func ensureCanvasActor(named name: String, root: CALayer) -> CanvasActorLayer? {
+        if let existing = canvasActorsByName[name] {
+            existing.container.frame = root.bounds
+            existing.container.isHidden = false
+            existing.container.opacity = 1
+            if existing.container.superlayer == nil {
+                root.addSublayer(existing.container)
+            }
+            return existing
+        }
+
+        let actor = CanvasActorLayer(name: name)
+        actor.container.frame = root.bounds
+        root.addSublayer(actor.container)
+        canvasActorsByName[name] = actor
+        return actor
+    }
+
+    private func canvasActor(named name: String, root: CALayer) -> CanvasActorLayer? {
+        guard let actor = canvasActorsByName[name] else { return nil }
+        actor.container.frame = root.bounds
+        if actor.container.superlayer == nil {
+            root.addSublayer(actor.container)
+        }
+        return actor
+    }
+
+    private func clearCanvas(_ actor: CanvasActorLayer) {
+        actor.clearItems()
+    }
+
+    private func applyCanvasDraw(_ actor: CanvasActorLayer, root: CALayer, payload: ActorOverlayPayload) {
+        guard let shape = payload.markerShape else { return }
+        let style = payload.resolvedMarkerStyle
+        let rect = payload.canvasMarkerRect(in: root, style: style)
+        let key = canvasItemKey(from: payload, prefix: "marker", actor: actor)
+        let layer = actor.markerLayersByKey[key] ?? CAShapeLayer()
+        if actor.markerLayersByKey[key] == nil {
+            actor.markerLayersByKey[key] = layer
+            actor.container.addSublayer(layer)
+        }
+
+        let path = CanvasMarkerGeometry.makeMarkerPath(
+            shape: shape,
+            rect: rect,
+            style: style,
+            seed: CanvasMarkerGeometry.markerSeed(shape: shape, rect: rect, style: style)
+        )
+
+        let reveal = CABasicAnimation(keyPath: "strokeEnd")
+        reveal.fromValue = 0
+        reveal.toValue = 1
+        reveal.duration = max(0.18, payload.durationSeconds ?? 0.26)
+        reveal.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        reveal.isRemovedOnCompletion = true
+        reveal.fillMode = .removed
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.frame = root.bounds
+        layer.path = path
+        layer.strokeColor = style.color
+        layer.fillColor = nil
+        layer.lineWidth = style.size
+        layer.lineCap = .round
+        layer.lineJoin = .round
+        layer.miterLimit = 1
+        layer.opacity = Float(style.opacity)
+        layer.allowsEdgeAntialiasing = true
+        layer.strokeEnd = 1
+        CATransaction.commit()
+
+        layer.add(reveal, forKey: "canvasMarkerReveal")
+    }
+
+    private func applyCanvasText(_ actor: CanvasActorLayer, root: CALayer, payload: ActorOverlayPayload) {
+        guard let text = payload.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return }
+        let fontSize = max(8, CGFloat(payload.size ?? 36))
+        let fontName = payload.font?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let font = Self.makeTextFont(name: fontName, size: fontSize)
+        let textColor = payload.color.flatMap(ActorOverlayColor.parse) ?? NSColor.systemRed.cgColor
+        let highlightColor = payload.highlight.flatMap { value -> CGColor? in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed.lowercased() == "none" {
+                return nil
+            }
+            return ActorOverlayColor.parse(trimmed)
+        }
+        let maxWidth = payload.canvasTextMaxWidth(in: root, fontSize: fontSize)
+        let textSize = estimateTextSize(text: text, maxWidth: maxWidth, font: font)
+        let padding = max(10, fontSize * 0.36)
+        let frame = payload.canvasTextFrame(in: root, textSize: textSize, padding: padding)
+        let key = canvasItemKey(from: payload, prefix: "text", actor: actor)
+        let item = actor.textLayersByKey[key] ?? CanvasTextItemLayer()
+        if actor.textLayersByKey[key] == nil {
+            actor.textLayersByKey[key] = item
+            actor.container.addSublayer(item.container)
+        }
+
+        item.configure(
+            frame: frame,
+            text: text,
+            font: font,
+            fontSize: fontSize,
+            textColor: textColor,
+            highlightColor: highlightColor
+        )
+
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.duration = 0.16
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        item.container.opacity = 1
+        item.container.add(fade, forKey: "canvasTextReveal")
+    }
+
     private func syncPosition(_ actor: PointerActorLayer, root: CALayer) {
         actor.container.frame = root.bounds
         let viewPoint = OverlayWindowManager.shared.screenPointToView(actor.screenPosition)
@@ -208,6 +464,20 @@ final class ActorOverlayService {
 
     private func durationSeconds(_ value: Double?) -> CFTimeInterval {
         max(0, (value ?? 180) / 1000)
+    }
+
+    private static func makeTextFont(name: String?, size: CGFloat) -> CTFont {
+        if let name, !name.isEmpty {
+            return CTFontCreateWithName(name as CFString, size, nil)
+        }
+        return CTFontCreateWithName("SF Pro Text" as CFString, size, nil)
+    }
+
+    private func canvasItemKey(from payload: ActorOverlayPayload, prefix: String, actor: CanvasActorLayer) -> String {
+        if let raw = payload.id?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            return raw
+        }
+        return actor.nextItemKey(prefix: prefix)
     }
 
     private func currentPosition(_ actor: PointerActorLayer) -> CGPoint {
@@ -640,8 +910,12 @@ final class ActorOverlayService {
     }
 
     private func estimateTextSize(text: String, maxWidth: CGFloat) -> CGSize {
+        estimateTextSize(text: text, maxWidth: maxWidth, font: NSFont.systemFont(ofSize: 12, weight: .medium))
+    }
+
+    private func estimateTextSize(text: String, maxWidth: CGFloat, font: NSFont) -> CGSize {
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+            .font: font,
         ]
         let rect = NSString(string: text).boundingRect(
             with: CGSize(width: maxWidth, height: 400),
@@ -649,5 +923,486 @@ final class ActorOverlayService {
             attributes: attributes
         )
         return CGSize(width: ceil(rect.width), height: ceil(rect.height))
+    }
+}
+
+private extension ActorOverlayPayload {
+    var markerShape: CanvasMarkerShape? {
+        let raw = shape?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch raw {
+        case "rect":
+            return .rect
+        case "circ", "circle":
+            return .circ
+        case "check":
+            return .check
+        case "cross":
+            return .cross
+        case "underline":
+            return .underline
+        default:
+            return nil
+        }
+    }
+
+    var markerRect: ActorOverlayRect? {
+        rect ?? box
+    }
+
+    var resolvedMarkerStyle: CanvasMarkerStyle {
+        CanvasMarkerStyle(
+            color: color.flatMap(ActorOverlayColor.parse) ?? NSColor.systemCyan.cgColor,
+            size: max(0.5, CGFloat(size ?? 4)),
+            padding: max(0, CGFloat(padding ?? 8)),
+            roughness: min(max(CGFloat(roughness ?? 0.22), 0), 1),
+            opacity: min(max(CGFloat(opacity ?? 1), 0), 1)
+        )
+    }
+
+    func canvasMarkerRect(in root: CALayer, style: CanvasMarkerStyle) -> CGRect {
+        let sourceRect = markerRect?.cgRect ?? fallbackCanvasRect(in: root, style: style)
+        return sourceRect.insetBy(dx: -style.padding, dy: -style.padding)
+    }
+
+    func canvasTextFrame(in root: CALayer, textSize: CGSize, padding: CGFloat) -> CGRect {
+        if let rect = markerRect?.cgRect {
+            return rect
+        }
+
+        let point = position?.cgPoint ?? CGPoint(x: root.bounds.midX, y: root.bounds.midY)
+        let width = textSize.width + padding * 2
+        let height = textSize.height + padding * 2
+        return CGRect(
+            x: point.x - width / 2,
+            y: point.y - height / 2,
+            width: width,
+            height: height
+        )
+    }
+
+    func canvasTextMaxWidth(in root: CALayer, fontSize: CGFloat) -> CGFloat {
+        if let rect = markerRect?.cgRect {
+            return max(40, rect.width - 20)
+        }
+        return min(max(root.bounds.width * 0.68, fontSize * 8), 640)
+    }
+
+    private func fallbackCanvasRect(in root: CALayer, style: CanvasMarkerStyle) -> CGRect {
+        let side = max(96, style.size * 24)
+        let point = position?.cgPoint ?? CGPoint(x: root.bounds.midX, y: root.bounds.midY)
+        return CGRect(x: point.x - side / 2, y: point.y - side / 2, width: side, height: side)
+    }
+
+    var durationSeconds: CFTimeInterval? {
+        durationMs.map { max(0, $0) / 1000.0 }
+    }
+}
+
+private struct CanvasMarkerStyle {
+    let color: CGColor
+    let size: CGFloat
+    let padding: CGFloat
+    let roughness: CGFloat
+    let opacity: CGFloat
+}
+
+private enum CanvasMarkerShape: String {
+    case rect
+    case circ
+    case check
+    case cross
+    case underline
+}
+
+private enum ActorOverlayColor {
+    private static let hexColorPattern = "^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$"
+    private static let rgbColorPattern = "^rgb\\(\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*,\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*,\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*\\)$"
+    private static let rgbaColorPattern = "^rgba\\(\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*,\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*,\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*,\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*\\)$"
+
+    static func parse(_ value: String) -> CGColor? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("#") {
+            return parseHexColor(trimmed)
+        }
+
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("rgb(") || lower.hasPrefix("rgba(") {
+            return parseRGBColor(trimmed)
+        }
+
+        return nil
+    }
+
+    private static func parseHexColor(_ value: String) -> CGColor? {
+        guard value.range(of: hexColorPattern, options: .regularExpression) != nil else {
+            return nil
+        }
+
+        let hex = String(value.dropFirst())
+        let expanded: String
+        switch hex.count {
+        case 3:
+            expanded = hex.map { "\($0)\($0)" }.joined() + "FF"
+        case 4:
+            expanded = hex.map { "\($0)\($0)" }.joined()
+        case 6:
+            expanded = hex + "FF"
+        case 8:
+            expanded = hex
+        default:
+            return nil
+        }
+
+        guard let intValue = UInt64(expanded, radix: 16) else {
+            return nil
+        }
+
+        let r = CGFloat((intValue >> 24) & 0xFF) / 255
+        let g = CGFloat((intValue >> 16) & 0xFF) / 255
+        let b = CGFloat((intValue >> 8) & 0xFF) / 255
+        let a = CGFloat(intValue & 0xFF) / 255
+        return CGColor(red: r, green: g, blue: b, alpha: a)
+    }
+
+    private static func parseRGBColor(_ value: String) -> CGColor? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let matches = matchColorPattern(trimmed, pattern: rgbColorPattern), matches.count == 4 {
+            guard
+                let r = parseRGBComponent(matches[1]),
+                let g = parseRGBComponent(matches[2]),
+                let b = parseRGBComponent(matches[3])
+            else {
+                return nil
+            }
+            return CGColor(red: r, green: g, blue: b, alpha: 1)
+        }
+
+        if let matches = matchColorPattern(trimmed, pattern: rgbaColorPattern), matches.count == 5 {
+            guard
+                let r = parseRGBComponent(matches[1]),
+                let g = parseRGBComponent(matches[2]),
+                let b = parseRGBComponent(matches[3]),
+                let a = parseAlphaComponent(matches[4])
+            else {
+                return nil
+            }
+            return CGColor(red: r, green: g, blue: b, alpha: a)
+        }
+
+        return nil
+    }
+
+    private static func parseRGBComponent(_ value: String) -> CGFloat? {
+        guard isStrictDecimal(value), let number = Double(value), number >= 0, number <= 255 else {
+            return nil
+        }
+        return CGFloat(number / 255.0)
+    }
+
+    private static func parseAlphaComponent(_ value: String) -> CGFloat? {
+        guard isStrictDecimal(value), let number = Double(value), number >= 0, number <= 1 else {
+            return nil
+        }
+        return CGFloat(number)
+    }
+
+    private static func isStrictDecimal(_ value: String) -> Bool {
+        value.range(of: #"^[+-]?(?:\d+|\d*\.\d+|\.\d+)$"#, options: .regularExpression) != nil
+    }
+
+    private static func matchColorPattern(_ value: String, pattern: String) -> [String]? {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return nil
+        }
+
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        guard let match = regex.firstMatch(in: value, options: [], range: range) else {
+            return nil
+        }
+
+        return (0..<match.numberOfRanges).compactMap { index in
+            guard let range = Range(match.range(at: index), in: value) else {
+                return nil
+            }
+            return String(value[range])
+        }
+    }
+}
+
+private enum CanvasMarkerGeometry {
+    static func makeMarkerPath(shape: CanvasMarkerShape, rect: CGRect, style: CanvasMarkerStyle, seed: UInt64) -> CGPath {
+        var random = StableRandom(seed: seed)
+        let path = CGMutablePath()
+
+        switch shape {
+        case .rect:
+            addRoughClosedPath(path, points: markerRectanglePoints(in: rect, style: style, random: &random))
+        case .circ:
+            addSmoothClosedPath(path, points: markerCirclePoints(in: rect, style: style, random: &random))
+        case .check:
+            for stroke in markerCheckPoints(in: rect, style: style, random: &random) {
+                addSmoothOpenPath(path, points: stroke)
+            }
+        case .cross:
+            for stroke in markerCrossPoints(in: rect, style: style, random: &random) {
+                addSmoothOpenPath(path, points: stroke)
+            }
+        case .underline:
+            addSmoothOpenPath(path, points: markerUnderlinePoints(in: rect, style: style, random: &random))
+        }
+
+        return path
+    }
+
+    static func markerSeed(shape: CanvasMarkerShape, rect: CGRect, style: CanvasMarkerStyle) -> UInt64 {
+        var hasher = StableHasher()
+        hasher.combine(shape.rawValue)
+        hasher.combine(rect.origin.x)
+        hasher.combine(rect.origin.y)
+        hasher.combine(rect.width)
+        hasher.combine(rect.height)
+        hasher.combine(style.size)
+        hasher.combine(style.padding)
+        hasher.combine(style.roughness)
+        hasher.combine(style.opacity)
+        return hasher.finalize()
+    }
+
+    private static func markerRectanglePoints(in rect: CGRect, style: CanvasMarkerStyle, random: inout StableRandom) -> [CGPoint] {
+        let jitter = markerJitter(in: rect, style: style)
+        let anchorJitterX = max(rect.width * 0.05, jitter * (0.75 + style.roughness * 0.45))
+        let anchorJitterY = max(rect.height * 0.05, jitter * (0.75 + style.roughness * 0.45))
+        return [
+            CGPoint(x: rect.minX + random.uniform(-anchorJitterX, anchorJitterX), y: rect.minY + random.uniform(-anchorJitterY, anchorJitterY)),
+            CGPoint(x: rect.maxX + random.uniform(-anchorJitterX, anchorJitterX), y: rect.minY + random.uniform(-anchorJitterY, anchorJitterY)),
+            CGPoint(x: rect.maxX + random.uniform(-anchorJitterX, anchorJitterX), y: rect.maxY + random.uniform(-anchorJitterY, anchorJitterY)),
+            CGPoint(x: rect.minX + random.uniform(-anchorJitterX, anchorJitterX), y: rect.maxY + random.uniform(-anchorJitterY, anchorJitterY)),
+        ]
+    }
+
+    private static func markerCirclePoints(in rect: CGRect, style: CanvasMarkerStyle, random: inout StableRandom) -> [CGPoint] {
+        let jitter = markerJitter(in: rect, style: style)
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let radiusX = max(rect.width * 0.5, style.size)
+        let radiusY = max(rect.height * 0.5, style.size)
+        let pointCount = min(28, max(12, Int((max(rect.width, rect.height) / max(style.size * 1.5, 1)).rounded(.up))))
+
+        var result: [CGPoint] = []
+        for index in 0..<pointCount {
+            let progress = CGFloat(index) / CGFloat(pointCount)
+            let angle = (progress * 2 * .pi) - (.pi / 2)
+            let radialJitter = random.uniform(-jitter, jitter) * (0.4 + style.roughness * 0.6)
+            result.append(
+                CGPoint(
+                    x: center.x + cos(angle) * (radiusX + radialJitter),
+                    y: center.y + sin(angle) * (radiusY + radialJitter)
+                )
+            )
+        }
+        return result
+    }
+
+    private static func markerCheckPoints(in rect: CGRect, style: CanvasMarkerStyle, random: inout StableRandom) -> [[CGPoint]] {
+        let jitter = markerJitter(in: rect, style: style)
+        let start1 = CGPoint(x: rect.minX + rect.width * 0.20 + random.uniform(-jitter, jitter) * 0.4, y: rect.minY + rect.height * 0.55 + random.uniform(-jitter, jitter) * 0.4)
+        let end1 = CGPoint(x: rect.minX + rect.width * 0.42 + random.uniform(-jitter, jitter) * 0.4, y: rect.maxY - rect.height * 0.10 + random.uniform(-jitter, jitter) * 0.4)
+        let start2 = CGPoint(x: rect.minX + rect.width * 0.40 + random.uniform(-jitter, jitter) * 0.45, y: rect.maxY - rect.height * 0.15 + random.uniform(-jitter, jitter) * 0.45)
+        let end2 = CGPoint(x: rect.maxX - rect.width * 0.12 + random.uniform(-jitter, jitter) * 0.45, y: rect.minY + rect.height * 0.18 + random.uniform(-jitter, jitter) * 0.45)
+        return [
+            roughStrokePoints(from: start1, to: end1, style: style, random: &random),
+            roughStrokePoints(from: start2, to: end2, style: style, random: &random),
+        ]
+    }
+
+    private static func markerCrossPoints(in rect: CGRect, style: CanvasMarkerStyle, random: inout StableRandom) -> [[CGPoint]] {
+        let jitter = markerJitter(in: rect, style: style)
+        let firstStart = CGPoint(x: rect.minX + rect.width * 0.12 + random.uniform(-jitter, jitter) * 0.5, y: rect.minY + rect.height * 0.16 + random.uniform(-jitter, jitter) * 0.5)
+        let firstEnd = CGPoint(x: rect.maxX - rect.width * 0.10 + random.uniform(-jitter, jitter) * 0.5, y: rect.maxY - rect.height * 0.12 + random.uniform(-jitter, jitter) * 0.5)
+        let secondStart = CGPoint(x: rect.maxX - rect.width * 0.12 + random.uniform(-jitter, jitter) * 0.5, y: rect.minY + rect.height * 0.18 + random.uniform(-jitter, jitter) * 0.5)
+        let secondEnd = CGPoint(x: rect.minX + rect.width * 0.10 + random.uniform(-jitter, jitter) * 0.5, y: rect.maxY - rect.height * 0.10 + random.uniform(-jitter, jitter) * 0.5)
+        return [
+            roughStrokePoints(from: firstStart, to: firstEnd, style: style, random: &random),
+            roughStrokePoints(from: secondStart, to: secondEnd, style: style, random: &random),
+        ]
+    }
+
+    private static func markerUnderlinePoints(in rect: CGRect, style: CanvasMarkerStyle, random: inout StableRandom) -> [CGPoint] {
+        let jitter = markerJitter(in: rect, style: style)
+        let yBase = rect.maxY - max(style.size * 0.55, rect.height * 0.08)
+        let start = CGPoint(x: rect.minX - style.size * 0.35, y: yBase + random.uniform(-jitter, jitter) * 0.2)
+        let end = CGPoint(x: rect.maxX + style.size * 0.35, y: yBase + random.uniform(-jitter, jitter) * 0.2)
+        return roughStrokePoints(from: start, to: end, style: style, random: &random)
+    }
+
+    private static func roughStrokePoints(from start: CGPoint, to end: CGPoint, style: CanvasMarkerStyle, random: inout StableRandom) -> [CGPoint] {
+        let delta = CGPoint(x: end.x - start.x, y: end.y - start.y)
+        let length = max(hypot(delta.x, delta.y), 1)
+        let tangent = CGPoint(x: delta.x / length, y: delta.y / length)
+        let normal = CGPoint(x: -tangent.y, y: tangent.x)
+        let jitter = markerJitter(length: length, style: style)
+        let drift = jitter * (0.35 + style.roughness * 0.35)
+
+        let startTangentJitter = random.uniform(-style.size * 0.28, style.size * 0.24)
+        let startNormalJitter = random.uniform(-drift, drift)
+        let mid1NormalJitter = random.uniform(-jitter, jitter)
+        let mid1TangentJitter = random.uniform(-jitter * 0.12, jitter * 0.12)
+        let mid2NormalJitter = random.uniform(-jitter, jitter)
+        let mid2TangentJitter = random.uniform(-jitter * 0.12, jitter * 0.12)
+        let endTangentJitter = random.uniform(-style.size * 0.18, style.size * 0.32)
+        let endNormalJitter = random.uniform(-drift, drift)
+
+        let startPoint = CGPoint(
+            x: start.x + tangent.x * startTangentJitter + normal.x * startNormalJitter,
+            y: start.y + tangent.y * startTangentJitter + normal.y * startNormalJitter
+        )
+        let mid1 = CGPoint(
+            x: start.x + delta.x * 0.33 + normal.x * mid1NormalJitter + tangent.x * mid1TangentJitter,
+            y: start.y + delta.y * 0.33 + normal.y * mid1NormalJitter + tangent.y * mid1TangentJitter
+        )
+        let mid2 = CGPoint(
+            x: start.x + delta.x * 0.68 + normal.x * mid2NormalJitter + tangent.x * mid2TangentJitter,
+            y: start.y + delta.y * 0.68 + normal.y * mid2NormalJitter + tangent.y * mid2TangentJitter
+        )
+        let endPoint = CGPoint(
+            x: end.x + tangent.x * endTangentJitter + normal.x * endNormalJitter,
+            y: end.y + tangent.y * endTangentJitter + normal.y * endNormalJitter
+        )
+
+        return [startPoint, mid1, mid2, endPoint]
+    }
+
+    private static func markerJitter(in rect: CGRect, style: CanvasMarkerStyle) -> CGFloat {
+        let base = max(style.size * (0.08 + style.roughness * 0.45), 0.35)
+        let rectScale = max(1, min(rect.width, rect.height) * 0.035)
+        return min(rectScale, max(base, style.size * 0.1))
+    }
+
+    private static func markerJitter(length: CGFloat, style: CanvasMarkerStyle) -> CGFloat {
+        let base = max(style.size * (0.10 + style.roughness * 0.55), 0.35)
+        let lengthScale = max(0.8, length * 0.035)
+        return min(lengthScale, base)
+    }
+
+    private static func addSmoothClosedPath(_ path: CGMutablePath, points: [CGPoint]) {
+        guard points.count >= 2 else { return }
+        path.move(to: points[0])
+        let count = points.count
+        for index in 0..<count {
+            let p0 = points[(index - 1 + count) % count]
+            let p1 = points[index]
+            let p2 = points[(index + 1) % count]
+            let p3 = points[(index + 2) % count]
+            let cp1 = CGPoint(x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6)
+            let cp2 = CGPoint(x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6)
+            path.addCurve(to: p2, control1: cp1, control2: cp2)
+        }
+        path.closeSubpath()
+    }
+
+    private static func addRoughClosedPath(_ path: CGMutablePath, points: [CGPoint]) {
+        guard points.count >= 2 else { return }
+        path.move(to: points[0])
+        for point in points.dropFirst() {
+            path.addLine(to: point)
+        }
+        path.closeSubpath()
+    }
+
+    private static func addSmoothOpenPath(_ path: CGMutablePath, points: [CGPoint]) {
+        guard points.count >= 2 else { return }
+        path.move(to: points[0])
+        if points.count == 2 {
+            path.addLine(to: points[1])
+            return
+        }
+
+        for index in 0..<(points.count - 1) {
+            let p0 = index == 0 ? points[0] : points[index - 1]
+            let p1 = points[index]
+            let p2 = points[index + 1]
+            let p3 = index + 2 < points.count ? points[index + 2] : points[points.count - 1]
+            let cp1 = CGPoint(x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6)
+            let cp2 = CGPoint(x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6)
+            path.addCurve(to: p2, control1: cp1, control2: cp2)
+        }
+    }
+}
+
+private struct StableHasher {
+    private var state: UInt64 = 0xcbf29ce484222325
+
+    mutating func combine(_ value: UInt64) {
+        state ^= value
+        state &*= 0x100000001b3
+    }
+
+    mutating func combine(_ value: Double) {
+        combine(value.bitPattern)
+    }
+
+    mutating func combine(_ value: String) {
+        for byte in value.utf8 {
+            combine(UInt64(byte))
+        }
+    }
+
+    func finalize() -> UInt64 {
+        state
+    }
+}
+
+private struct StableRandom {
+    private var state: UInt64
+
+    init(seed: UInt64) {
+        self.state = seed == 0 ? 0x9e3779b97f4a7c15 : seed
+    }
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9e3779b97f4a7c15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xbf58476d1ce4e5b9
+        z = (z ^ (z >> 27)) &* 0x94d049bb133111eb
+        return z ^ (z >> 31)
+    }
+
+    mutating func uniform(_ lower: CGFloat, _ upper: CGFloat) -> CGFloat {
+        let raw = next()
+        let unit = Double(raw) / Double(UInt64.max)
+        return lower + (upper - lower) * CGFloat(unit)
+    }
+}
+
+private extension CanvasTextItemLayer {
+    func configure(
+        frame: CGRect,
+        text: String,
+        font: CTFont,
+        fontSize: CGFloat,
+        textColor: CGColor,
+        highlightColor: CGColor?
+    ) {
+        container.frame = frame
+        container.isHidden = false
+
+        background.frame = container.bounds
+        background.cornerRadius = max(10, fontSize * 0.32)
+        background.backgroundColor = highlightColor ?? NSColor.clear.cgColor
+        background.opacity = highlightColor == nil ? 0 : 1
+        background.shadowOpacity = highlightColor == nil ? 0 : 0.18
+        background.shadowRadius = highlightColor == nil ? 0 : 8
+        background.shadowOffset = CGSize(width: 0, height: -1)
+
+        let horizontalPadding = max(10, fontSize * 0.36)
+        let verticalPadding = max(8, fontSize * 0.22)
+        label.frame = container.bounds.insetBy(dx: horizontalPadding, dy: verticalPadding)
+        label.string = text
+        label.font = font
+        label.fontSize = fontSize
+        label.foregroundColor = textColor
+        label.alignmentMode = .left
+        label.isWrapped = true
+        label.truncationMode = .end
     }
 }

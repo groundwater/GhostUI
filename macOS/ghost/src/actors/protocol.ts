@@ -1,8 +1,30 @@
+import { normalizeCssColorString } from "../overlay/draw.js";
+import type { DrawMarkerShape } from "../overlay/draw.js";
+import { parseCLICompositionPayloadStream, requireCLICompositionBounds } from "../cli/payload.js";
+
 export const ACTOR_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
-export type ActorType = "pointer";
+export type ActorType = "pointer" | "canvas";
 export type PointerMoveStyle = "purposeful" | "fast" | "slow" | "wandering";
 export type PointerButton = "left" | "right" | "middle";
+export type CanvasDrawShape = DrawMarkerShape;
+export interface CanvasBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+export interface CanvasDrawStyle {
+  color: string;
+  size: number;
+  padding: number;
+}
+export interface CanvasTextStyle {
+  font: string;
+  size: number;
+  color: string;
+  highlight?: string;
+}
 export const ACTOR_CLICK_VISUAL_DURATION_MS = 260;
 export const ACTOR_CLICK_PASSTHROUGH_DELAY_MS = Math.round(ACTOR_CLICK_VISUAL_DURATION_MS / 2);
 export type ActorErrorCode =
@@ -33,7 +55,10 @@ export type ActorAction =
   | { kind: "scroll"; dx: number; dy: number }
   | { kind: "think"; forMs: number }
   | { kind: "narrate"; text: string }
-  | { kind: "dismiss" };
+  | { kind: "dismiss" }
+  | { kind: "draw"; shape: CanvasDrawShape; style: CanvasDrawStyle; box?: CanvasBox; boxes?: CanvasBox[] }
+  | { kind: "text"; text: string; style: CanvasTextStyle; box?: CanvasBox }
+  | { kind: "clear" };
 
 export interface ActorRunRequest {
   action: ActorAction;
@@ -102,10 +127,10 @@ function expectActorName(name: unknown, label = "name"): string {
 }
 
 function expectActorType(type: unknown): ActorType {
-  if (type !== "pointer") {
+  if (type !== "pointer" && type !== "canvas") {
     throw new ActorApiError("unknown_type", `Unknown actor type: ${String(type || "")}`);
   }
-  return "pointer";
+  return type;
 }
 
 function normalizePoint(value: unknown, label: string): { x: number; y: number } {
@@ -114,6 +139,36 @@ function normalizePoint(value: unknown, label: string): { x: number; y: number }
     x: expectFiniteNumber(record.x, `${label}.x`),
     y: expectFiniteNumber(record.y, `${label}.y`),
   };
+}
+
+function normalizeCanvasBox(value: unknown, label: string): CanvasBox {
+  const record = expectRecord(value, label);
+  const width = expectPositiveNumber(record.width, `${label}.width`);
+  const height = expectPositiveNumber(record.height, `${label}.height`);
+  return {
+    x: expectFiniteNumber(record.x, `${label}.x`),
+    y: expectFiniteNumber(record.y, `${label}.y`),
+    width,
+    height,
+  };
+}
+
+function expectCanvasDrawShape(value: unknown, label: string): CanvasDrawShape {
+  if (typeof value !== "string") {
+    throw new ActorApiError("invalid_args", `${label} must be one of rect, circ, check, cross, underline`);
+  }
+  const shape = value.trim();
+  if (shape !== "rect" && shape !== "circ" && shape !== "check" && shape !== "cross" && shape !== "underline") {
+    throw new ActorApiError("invalid_args", `${label} must be one of rect, circ, check, cross, underline`);
+  }
+  return shape;
+}
+
+function expectCanvasColor(value: unknown, label: string, fallback: string): string {
+  if (value === undefined) {
+    return fallback;
+  }
+  return normalizeCssColorString(expectString(value, label), label);
 }
 
 export function actorErrorStatus(code: ActorErrorCode): number {
@@ -228,6 +283,53 @@ export function normalizeActorRunRequest(value: unknown): ActorRunRequest {
       };
     case "dismiss":
       return { timeoutMs, action: { kind } };
+    case "draw": {
+      const shape = expectCanvasDrawShape(record.shape, "shape");
+      const styleRecord = isRecord(record.style) ? record.style : {};
+      const box = record.box === undefined ? undefined : normalizeCanvasBox(record.box, "box");
+      const boxes = Array.isArray(record.boxes)
+        ? record.boxes.map((item, index) => normalizeCanvasBox(item, `boxes[${index}]`))
+        : undefined;
+      if (box && boxes) {
+        throw new ActorApiError("invalid_args", "box and boxes cannot both be provided");
+      }
+      return {
+        timeoutMs,
+        action: {
+          kind,
+          shape,
+          style: {
+            color: expectCanvasColor(styleRecord.color, "style.color", "#FF3B30"),
+            size: styleRecord.size === undefined ? 4 : expectPositiveNumber(styleRecord.size, "style.size"),
+            padding: styleRecord.padding === undefined ? 0 : expectNonNegativeNumber(styleRecord.padding, "style.padding"),
+          },
+          box,
+          boxes,
+        },
+      };
+    }
+    case "text": {
+      const styleRecord = isRecord(record.style) ? record.style : {};
+      const highlightRaw = styleRecord.highlight === undefined ? undefined : expectString(styleRecord.highlight, "style.highlight");
+      return {
+        timeoutMs,
+        action: {
+          kind,
+          text: expectString(record.text, "text"),
+          style: {
+            font: styleRecord.font === undefined ? "SF Pro Text" : expectString(styleRecord.font, "style.font"),
+            size: styleRecord.size === undefined ? 36 : expectPositiveNumber(styleRecord.size, "style.size"),
+            color: expectCanvasColor(styleRecord.color, "style.color", "#FF3B30"),
+            highlight: highlightRaw === undefined || highlightRaw === "none"
+              ? undefined
+              : normalizeCssColorString(highlightRaw, "style.highlight"),
+          },
+          box: record.box === undefined ? undefined : normalizeCanvasBox(record.box, "box"),
+        },
+      };
+    }
+    case "clear":
+      return { timeoutMs, action: { kind } };
     default:
       throw new ActorApiError("unknown_action", `Unknown action: ${kind}`);
   }
@@ -272,7 +374,7 @@ export function parseActorSpawnCLIArgs(args: string[]): ActorSpawnRequest {
   const type = rest.shift();
   const name = rest.shift();
   if (!type || !name) {
-    throw new ActorApiError("invalid_args", "Usage: gui actor spawn <type> <name> [--duration-scale <scale>]");
+    throw new ActorApiError("invalid_args", "Usage: gui actor spawn <pointer|canvas> <name> [--duration-scale <scale>]");
   }
 
   let durationScale = 1;
@@ -293,7 +395,149 @@ export function parseActorSpawnCLIArgs(args: string[]): ActorSpawnRequest {
   };
 }
 
-export function parseActorRunCLIArgs(actionName: string, args: string[]): ActorRunRequest {
+function parseCanvasBoxLiteral(args: string[], usageLabel: string): CanvasBox | undefined {
+  const index = args.findIndex((token) => !token.startsWith("--") && token !== "-");
+  if (index < 0) {
+    return undefined;
+  }
+  const xToken = args[index];
+  const yToken = args[index + 1];
+  const widthToken = args[index + 2];
+  const heightToken = args[index + 3];
+  if (!xToken || !yToken || !widthToken || !heightToken) {
+    return undefined;
+  }
+  const x = Number(xToken);
+  const y = Number(yToken);
+  const width = Number(widthToken);
+  const height = Number(heightToken);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+    return undefined;
+  }
+  if (width <= 0 || height <= 0) {
+    throw new ActorApiError("invalid_args", `${usageLabel} literal boxes require positive width and height`);
+  }
+  args.splice(index, 4);
+  return {
+    x,
+    y,
+    width,
+    height,
+  };
+}
+
+function parseCanvasBoxesFromLiteral(args: string[], usageLabel: string): CanvasBox[] | undefined {
+  const box = parseCanvasBoxLiteral(args, usageLabel);
+  return box ? [box] : undefined;
+}
+
+type CanvasBoundsNode = {
+  _tag: string;
+  _children?: CanvasBoundsNode[];
+} & Record<string, unknown>;
+
+function normalizeCanvasBoundsRect(value: unknown): CanvasBox | null {
+  if (typeof value === "string") {
+    const match = value.trim().match(/^\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)$/);
+    if (!match) {
+      return null;
+    }
+    const x = Number(match[1]);
+    const y = Number(match[2]);
+    const width = Number(match[3]);
+    const height = Number(match[4]);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return null;
+    }
+    return { x, y, width, height };
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const x = typeof record.x === "number" ? record.x : typeof record.x === "string" ? Number(record.x) : null;
+  const y = typeof record.y === "number" ? record.y : typeof record.y === "string" ? Number(record.y) : null;
+  const width = typeof record.width === "number" ? record.width : typeof record.width === "string" ? Number(record.width) : null;
+  const height = typeof record.height === "number" ? record.height : typeof record.height === "string" ? Number(record.height) : null;
+
+  if (
+    x === null || y === null || width === null || height === null
+    || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)
+    || width <= 0 || height <= 0
+  ) {
+    return null;
+  }
+
+  return { x, y, width, height };
+}
+
+function boundsFromCanvasNode(node: CanvasBoundsNode): CanvasBox | null {
+  return normalizeCanvasBoundsRect(node.frame)
+    ?? normalizeCanvasBoundsRect(node._frame)
+    ?? normalizeCanvasBoundsRect(node);
+}
+
+function collectCanvasBoundsRects(nodes: CanvasBoundsNode[] | null | undefined): {
+  rects: CanvasBox[];
+  firstNodeWithoutBounds: CanvasBoundsNode | null;
+} {
+  const rects: CanvasBox[] = [];
+  const seen = new Set<string>();
+  let firstNodeWithoutBounds: CanvasBoundsNode | null = null;
+
+  const walk = (node: CanvasBoundsNode): void => {
+    if (node._tag !== "VATRoot") {
+      const rect = boundsFromCanvasNode(node);
+      if (rect) {
+        const key = `${rect.x}:${rect.y}:${rect.width}:${rect.height}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          rects.push(rect);
+        }
+      } else {
+        firstNodeWithoutBounds ??= node;
+      }
+    }
+
+    for (const child of node._children ?? []) {
+      walk(child);
+    }
+  };
+
+  for (const node of nodes ?? []) {
+    walk(node);
+  }
+
+  return { rects, firstNodeWithoutBounds };
+}
+
+function parseCanvasBoxesFromStdin(stdinText: string, usageLabel: string): CanvasBox[] {
+  const payloads = parseCLICompositionPayloadStream(stdinText, usageLabel);
+  if (payloads.length === 0) {
+    throw new ActorApiError("invalid_args", `${usageLabel} stdin mode requires one AX/VAT target-bearing payload`);
+  }
+
+  if (payloads.length > 1) {
+    throw new ActorApiError("invalid_args", `${usageLabel} stdin mode requires exactly one AX/VAT target-bearing payload`);
+  }
+
+  const payload = payloads[0]!;
+  if (payload.source === "vat.query" && payload.nodes) {
+    const { rects, firstNodeWithoutBounds } = collectCanvasBoundsRects(payload.nodes as CanvasBoundsNode[]);
+    if (rects.length > 0) {
+      return rects;
+    }
+    if (firstNodeWithoutBounds) {
+      throw new ActorApiError("invalid_args", `${usageLabel} ${firstNodeWithoutBounds._tag} is missing bounds/frame coordinates`);
+    }
+  }
+
+  const bounds = requireCLICompositionBounds(payload, usageLabel);
+  return [bounds];
+}
+
+export function parseActorRunCLIArgs(actionName: string, args: string[], stdinText = ""): ActorRunRequest {
   const rest = [...args];
   const timeoutMs = parseTimeout(rest);
 
@@ -394,6 +638,199 @@ export function parseActorRunCLIArgs(actionName: string, args: string[]): ActorR
         throw new ActorApiError("invalid_args", `Unknown dismiss args: ${rest.join(" ")}`);
       }
       return { timeoutMs, action: { kind: "dismiss" } };
+    case "draw": {
+      const shape = expectCanvasDrawShape(rest.shift(), "shape");
+      const stdinIndex = rest.indexOf("-");
+      const useStdin = stdinIndex >= 0;
+      if (useStdin) {
+        rest.splice(stdinIndex, 1);
+      }
+      const style: Record<string, unknown> = {};
+      let box: CanvasBox | undefined;
+      for (let index = 0; index < rest.length; index++) {
+        const token = rest[index];
+        if (token === "--box") {
+          const xToken = requireOptionValue(rest, index, "--box x");
+          const yToken = rest[index + 2];
+          const widthToken = rest[index + 3];
+          const heightToken = rest[index + 4];
+          const x = Number(xToken);
+          const y = Number(yToken);
+          const width = Number(widthToken);
+          const height = Number(heightToken);
+          if (
+            !Number.isFinite(x)
+            || !Number.isFinite(y)
+            || !Number.isFinite(width)
+            || !Number.isFinite(height)
+            || width <= 0
+            || height <= 0
+          ) {
+            throw new ActorApiError("invalid_args", "--box requires finite x y width height with positive width and height");
+          }
+          box = { x, y, width, height };
+          rest.splice(index, 5);
+          index--;
+          continue;
+        }
+        if (token === "--padding") {
+          style.padding = expectNonNegativeNumber(Number(requireOptionValue(rest, index, "--padding")), "--padding");
+          rest.splice(index, 2);
+          index--;
+          continue;
+        }
+        if (token === "--size") {
+          style.size = expectPositiveNumber(Number(requireOptionValue(rest, index, "--size")), "--size");
+          rest.splice(index, 2);
+          index--;
+          continue;
+        }
+        if (token === "--color") {
+          style.color = normalizeCssColorString(expectString(requireOptionValue(rest, index, "--color"), "--color"), "--color");
+          rest.splice(index, 2);
+          index--;
+          continue;
+        }
+      }
+      if (useStdin && box) {
+        throw new ActorApiError("invalid_args", "actor run draw stdin mode cannot be combined with --box");
+      }
+      let boxes: CanvasBox[] | undefined;
+      if (useStdin) {
+        boxes = parseCanvasBoxesFromStdin(stdinText, "actor run draw");
+        if (boxes.length === 1) {
+          box = boxes[0];
+        }
+      } else if (box === undefined) {
+        boxes = parseCanvasBoxesFromLiteral(rest, "actor run draw");
+        if (boxes?.length === 1) {
+          box = boxes[0];
+        }
+      }
+      if (box && rest.length > 0) {
+        throw new ActorApiError("invalid_args", `Unknown draw args: ${rest.join(" ")}`);
+      }
+      if (rest.length > 0) {
+        throw new ActorApiError("invalid_args", `Unknown draw args: ${rest.join(" ")}`);
+      }
+      return {
+        timeoutMs,
+        action: {
+          kind: "draw",
+          shape,
+          style: {
+            color: expectCanvasColor(style.color, "style.color", "#FF3B30"),
+            size: style.size === undefined ? 4 : expectPositiveNumber(style.size, "style.size"),
+            padding: style.padding === undefined ? 0 : expectNonNegativeNumber(style.padding, "style.padding"),
+          },
+          box,
+          boxes: boxes && boxes.length > 1 ? boxes : undefined,
+        },
+      };
+    }
+    case "text": {
+      const textParts: string[] = [];
+      while (rest.length > 0 && rest[0] !== "-" && !rest[0].startsWith("--")) {
+        textParts.push(rest.shift() as string);
+      }
+      const text = textParts.join(" ").trim();
+      if (!text) {
+        throw new ActorApiError("invalid_args", "text requires <text>");
+      }
+      const stdinIndex = rest.indexOf("-");
+      const useStdin = stdinIndex >= 0;
+      if (useStdin) {
+        rest.splice(stdinIndex, 1);
+      }
+      const style: Record<string, unknown> = {};
+      let box: CanvasBox | undefined;
+      for (let index = 0; index < rest.length; index++) {
+        const token = rest[index];
+        if (token === "--font") {
+          style.font = expectString(requireOptionValue(rest, index, "--font"), "--font");
+          rest.splice(index, 2);
+          index--;
+          continue;
+        }
+        if (token === "--size") {
+          style.size = expectPositiveNumber(Number(requireOptionValue(rest, index, "--size")), "--size");
+          rest.splice(index, 2);
+          index--;
+          continue;
+        }
+        if (token === "--color") {
+          style.color = normalizeCssColorString(expectString(requireOptionValue(rest, index, "--color"), "--color"), "--color");
+          rest.splice(index, 2);
+          index--;
+          continue;
+        }
+        if (token === "--highlight") {
+          const rawHighlight = expectString(requireOptionValue(rest, index, "--highlight"), "--highlight");
+          style.highlight = rawHighlight === "none" ? undefined : normalizeCssColorString(rawHighlight, "--highlight");
+          rest.splice(index, 2);
+          index--;
+          continue;
+        }
+        if (token === "--box") {
+          const x = Number(requireOptionValue(rest, index, "--box x"));
+          const yToken = rest[index + 2];
+          const widthToken = rest[index + 3];
+          const heightToken = rest[index + 4];
+          const y = Number(yToken);
+          const width = Number(widthToken);
+          const height = Number(heightToken);
+          if (
+            !Number.isFinite(x)
+            || !Number.isFinite(y)
+            || !Number.isFinite(width)
+            || !Number.isFinite(height)
+            || width <= 0
+            || height <= 0
+          ) {
+            throw new ActorApiError("invalid_args", "--box requires finite x y width height with positive width and height");
+          }
+          box = { x, y, width, height };
+          rest.splice(index, 5);
+          index--;
+          continue;
+        }
+      }
+      if (useStdin && box) {
+        throw new ActorApiError("invalid_args", "actor run text stdin mode cannot be combined with --box");
+      }
+      if (useStdin) {
+        const boxes = parseCanvasBoxesFromStdin(stdinText, "actor run text");
+        if (boxes.length !== 1) {
+          throw new ActorApiError(
+            "invalid_args",
+            `actor run text stdin payload from vat.query resolved to ${boxes.length} bounds; canvas text stdin mode supports exactly one resolved bounds rectangle`,
+          );
+        }
+        box = boxes[0]!;
+      }
+      if (rest.length > 0) {
+        throw new ActorApiError("invalid_args", `Unknown text args: ${rest.join(" ")}`);
+      }
+      return {
+        timeoutMs,
+        action: {
+          kind: "text",
+          text,
+          style: {
+            font: style.font === undefined ? "SF Pro Text" : expectString(style.font, "style.font"),
+            size: style.size === undefined ? 36 : expectPositiveNumber(style.size, "style.size"),
+            color: expectCanvasColor(style.color, "style.color", "#FF3B30"),
+            highlight: style.highlight === undefined ? undefined : expectCanvasColor(style.highlight, "style.highlight", "#FF3B30"),
+          },
+          box,
+        },
+      };
+    }
+    case "clear":
+      if (rest.length > 0) {
+        throw new ActorApiError("invalid_args", `Unknown clear args: ${rest.join(" ")}`);
+      }
+      return { timeoutMs, action: { kind: "clear" } };
     default:
       throw new ActorApiError("unknown_action", `Unknown action: ${actionName}`);
   }

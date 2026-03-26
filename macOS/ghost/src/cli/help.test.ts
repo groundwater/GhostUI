@@ -147,14 +147,14 @@ describe("cli help rendering", () => {
     expect(help).toContain("gui gfx outline -");
     expect(help).toContain("gui gfx scan [--duration <milliseconds>] -");
     expect(help).toContain("gui gfx xray [--duration <milliseconds>] -");
-    expect(help).toContain("gui gfx spotlight [--duration <milliseconds>] -");
+    expect(help).toContain("gui gfx spotlight [--color <css-color>] [--duration <milliseconds>] -");
     expect(help).toContain("gui gfx arrow [--color <css-color>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--target <anchor>] [--from <x> <y>] -");
     expect(help).toContain("gui gfx draw <shape> <x y width height | -> [--padding <pixels>] [--size <points>] [--color <css-color>] [--duration <milliseconds>] [--roughness <0..1>]");
     expect(help).toContain("share the same target contract");
     expect(help).toContain("stdin `draw` share the same target contract");
     expect(help).toContain("only drives the red scan-line overlay");
     expect(help).toContain("dims the complement outside that union");
-    expect(help).toContain("`spotlight` accepts --duration and defaults to 1200ms");
+    expect(help).toContain("`spotlight` accepts --color and --duration, defaults to color `rgba(0,0,0,.5)`, and uses 1200ms");
     expect(help).toContain("defaults to color `#FF3B30`, size `6`, length `100`, duration `400`, and target `center`");
     expect(help).toContain("Use --target with center, topleft, topright, bottomleft, bottomright, left, top, right, or bottom");
     expect(help).toContain("`scan` defaults to 500ms. `xray` defaults to 650ms. `spotlight` and `outline` default to 1200ms. `arrow` defaults to 400ms. `draw` defaults to 250ms.");
@@ -437,8 +437,36 @@ describe("cli help rendering", () => {
     expect(findHelpTopic("actor")?.id).toBe("actor");
     expect(findHelpTopic("actor run")?.id).toBe("actor run");
     expect(findHelpTopic("actor run move")?.id).toBe("actor run move");
+    expect(findHelpTopic("actor spawn canvas")?.id).toBe("actor spawn canvas");
+    expect(findHelpTopic("actor run draw")?.id).toBe("actor run draw");
+    expect(findHelpTopic("actor run text")?.id).toBe("actor run text");
+    expect(findHelpTopic("actor run clear")?.id).toBe("actor run clear");
     expect(renderHelpTopic("actor run")).toContain("gui actor run <name>.move");
+    expect(renderHelpTopic("actor run")).toContain("gui actor run <name>.draw <rect|circ|check|cross|underline> [--padding <pixels>] [--size <points>] [--color <css-color>] [--box <x y width height> | -]");
+    expect(renderHelpTopic("actor run")).toContain("gui actor run <name>.text <Text> [--font <name>] [--size <pt>] [--color <css-color>] [--highlight <css-color|none>] [--box <x y width height> | -]");
+    expect(renderHelpTopic("actor run")).toContain("Bare gui actor run <name> resolves the actor type when possible");
     expect(renderHelpTopic("actor run move")).toContain("gui actor run <name>.move [--to <x> <y> | -]");
+    expect(renderHelpTopic("actor")).toContain("gui actor spawn canvas <name>");
+    expect(renderHelpTopic("actor")).toContain("Canvas actors retain marker and text items until gui actor run <name>.clear or gui actor kill <name>.");
+    expect(renderHelpTopic("actor spawn canvas")).toContain("gui actor spawn canvas <name>");
+    expect(renderHelpTopic("actor spawn canvas")).toContain("persistent canvas actor instance");
+    expect(renderHelpTopic("actor run draw")).toContain("gui actor run <name>.draw <rect|circ|check|cross|underline> [--padding <pixels>] [--size <points>] [--color <css-color>] [--box <x y width height> | -]");
+    expect(renderHelpTopic("actor run draw")).toContain("Pass `-` to read one AX/VAT target-bearing payload from stdin");
+    expect(renderHelpTopic("actor run draw")).toContain("Pass `-` to read one AX/VAT target-bearing payload from stdin and render the marker shape over every resolved bounds rectangle.");
+    expect(renderHelpTopic("actor run draw")).toContain("Use --box <x y width height> for an explicit target box");
+    expect(renderHelpTopic("actor run draw")).toContain("Colors accept #rgb, #rgba, #rrggbb, #rrggbbaa, rgb(), and rgba().");
+    expect(renderHelpTopic("actor run draw")).not.toContain("--timeout <ms>");
+    expect(renderHelpTopic("actor run text")).toContain("gui actor run <name>.text <Text>");
+    expect(renderHelpTopic("actor run text")).toContain("Use --highlight none to disable the background highlight.");
+    expect(renderHelpTopic("actor run clear")).toContain("Remove all retained canvas items");
+    expect(renderHelpTopic("actor run text")).toContain("[--font <name>] [--size <pt>] [--color <css-color>] [--highlight <css-color|none>] [--box <x y width height> | -]");
+    expect(renderHelpTopic("actor run text")).toContain("gui actor run canvas.notes.text \"Ready\" --font \"SF Pro Text\" --highlight 'rgba(255,255,0,0.35)'");
+    expect(renderHelpTopic("actor run text")).toContain("Pass `-` to read one AX/VAT target-bearing payload from stdin");
+    expect(renderHelpTopic("actor run text")).toContain("Multi-bounds VAT payloads are rejected instead of being truncated.");
+    expect(renderHelpTopic("actor run text")).toContain("Use --box <x y width height> for an explicit target box");
+    expect(renderHelpTopic("actor run clear")).toContain("gui actor run <name>.clear");
+    expect(renderHelpTopic("actor run text")).not.toContain("--timeout <ms>");
+    expect(renderHelpTopic("actor run clear")).not.toContain("--timeout <ms>");
   });
 
   test("finds the nearest actor help topic from argv-like tokens", () => {
@@ -448,12 +476,16 @@ describe("cli help rendering", () => {
     expect(findNearestHelpTopic(["actor", "pointer.main", "run", "move"])?.id).toBe("actor run move");
     expect(findNearestHelpTopic(["actor", "pointer.main", "kill"])?.id).toBe("actor kill");
     expect(findNearestHelpTopic(["actor", "spawn", "pointer", "pointer.main"])?.id).toBe("actor spawn");
+    expect(findNearestHelpTopic(["actor", "spawn", "canvas", "canvas.notes"])?.id).toBe("actor spawn canvas");
   });
 
   test("finds explicit actor help topics", () => {
     expect(findNearestHelpTopic(["actor", "run"])?.id).toBe("actor run");
     expect(findNearestHelpTopic(["actor", "run", "move"])?.id).toBe("actor run move");
     expect(findNearestHelpTopic(["actor", "kill"])?.id).toBe("actor kill");
+    expect(findNearestHelpTopic(["actor", "run", "draw"])?.id).toBe("actor run draw");
+    expect(findNearestHelpTopic(["actor", "run", "text"])?.id).toBe("actor run text");
+    expect(findNearestHelpTopic(["actor", "run", "clear"])?.id).toBe("actor run clear");
   });
 
   test("registers the rec help subtree", () => {

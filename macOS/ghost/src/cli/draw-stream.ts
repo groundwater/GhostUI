@@ -1,5 +1,5 @@
 export interface DrawOverlayStreamHooks {
-  onAttached?: () => void;
+  onAttached?: (signal: AbortSignal) => void | Promise<void>;
 }
 
 export async function waitForDrawOverlayAttachment(
@@ -43,7 +43,7 @@ export async function waitForDrawOverlayAttachment(
         buffer = buffer.slice(newlineIndex + 1);
         if (line === "attached" && !attached) {
           attached = true;
-          hooks.onAttached?.();
+          await hooks.onAttached?.(signal);
         }
         newlineIndex = buffer.indexOf("\n");
       }
@@ -51,7 +51,7 @@ export async function waitForDrawOverlayAttachment(
 
     const tail = buffer.trim();
     if (tail === "attached" && !attached) {
-      hooks.onAttached?.();
+      await hooks.onAttached?.(signal);
     }
   } catch (error: unknown) {
     if (signal.aborted) {

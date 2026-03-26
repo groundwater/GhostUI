@@ -473,6 +473,102 @@ export function parseSingleCLICompositionPayload(text: string, label = "payload"
   return payloads[0];
 }
 
+function stripLeadingJSONNoise(text: string): string {
+  return stripLeadingTerminalNoise(text).replace(/^[\s\uFEFF]+/u, "");
+}
+
+function findCompleteJSONObjectOrArrayEnd(text: string): number | null {
+  const input = stripLeadingJSONNoise(text);
+  if (!input) {
+    return null;
+  }
+
+  const open = input[0];
+  if (open !== "{" && open !== "[") {
+    return null;
+  }
+
+  const stack: Array<"}" | "]"> = [open === "{" ? "}" : "]"];
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 1; index < input.length; index++) {
+    const char = input[index]!;
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      stack.push("}");
+      continue;
+    }
+    if (char === "[") {
+      stack.push("]");
+      continue;
+    }
+    if (char === "}" || char === "]") {
+      const expected = stack.pop();
+      if (expected !== char) {
+        throw new Error("invalid JSON frame");
+      }
+      if (stack.length === 0) {
+        return index + 1;
+      }
+      continue;
+    }
+  }
+
+  return null;
+}
+
+export async function readFirstJSONFrame(stream: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let closed = false;
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        closed = true;
+        return stripLeadingJSONNoise(buffer).trim();
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const end = findCompleteJSONObjectOrArrayEnd(buffer);
+      if (end !== null) {
+        return stripLeadingJSONNoise(buffer).slice(0, end).trim();
+      }
+    }
+  } finally {
+    if (!closed) {
+      try {
+        await reader.cancel();
+      } catch {}
+    }
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
+}
+
 export function requireCLICompositionTarget(payload: CLICompositionPayload, label: string): AXTarget {
   if (payload.target) {
     return payload.target;

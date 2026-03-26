@@ -42,6 +42,24 @@ describe("waitForDrawOverlayAttachment", () => {
     expect(attached).toEqual(["attached"]);
   });
 
+  test("awaits async attached hooks before resolving", async () => {
+    const res = new Response(makeStream(["attached\n"], { closeWhenDone: true }), {
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+    const start = performance.now();
+    let hookResolved = false;
+
+    await waitForDrawOverlayAttachment(res, new AbortController().signal, {
+      async onAttached() {
+        await Bun.sleep(20);
+        hookResolved = true;
+      },
+    });
+
+    expect(hookResolved).toBe(true);
+    expect(performance.now() - start).toBeGreaterThanOrEqual(20);
+  });
+
   test("exits cleanly when aborted while waiting for more stream data", async () => {
     const abortController = new AbortController();
     let canceled = 0;

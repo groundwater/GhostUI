@@ -172,6 +172,17 @@ describe("actor client", () => {
     }
   });
 
+  test("spawnActor accepts canvas actors", async () => {
+    const { calls, restore } = mockFetch({ ok: true, name: "canvas.notes", type: "canvas", durationScale: 1 });
+    try {
+      const result = await spawnActor("canvas", "canvas.notes");
+      expect(result).toEqual({ ok: true, name: "canvas.notes", type: "canvas", durationScale: 1 });
+      expect(calls[0].init?.body).toBe(JSON.stringify({ type: "canvas", name: "canvas.notes" }));
+    } finally {
+      restore();
+    }
+  });
+
   test("runActor posts to /api/actors/:name/run", async () => {
     const { calls, restore } = mockFetch({ ok: true, name: "pointer", completed: true });
     try {

@@ -8,25 +8,11 @@ import {
   type ActorRunRequest,
   type ActorSpawnRequest,
   type ActorType,
+  type CanvasBox,
+  type CanvasDrawStyle,
+  type CanvasDrawShape,
+  type CanvasTextStyle,
 } from "./protocol.js";
-
-export interface ActorOverlayCommand {
-  op: "spawn" | "show" | "move" | "click" | "drag" | "scroll" | "thinkStart" | "thinkStop" | "narrate" | "dismiss" | "kill" | "cancel";
-  name: string;
-  type?: ActorType;
-  position?: { x: number; y: number };
-  to?: { x: number; y: number };
-  durationMs?: number;
-  style?: string;
-  button?: string;
-  dx?: number;
-  dy?: number;
-  text?: string;
-}
-
-export interface ActorOverlayRenderer {
-  send(command: ActorOverlayCommand): void;
-}
 
 interface ActorState {
   name: string;
@@ -35,10 +21,56 @@ interface ActorState {
   position: { x: number; y: number };
   hidden: boolean;
   activeRun?: { controller: AbortController };
+  canvas?: CanvasState;
+}
+
+interface CanvasState {
+  nextItemIndex: number;
+  drawItems: CanvasDrawItemState[];
+  textItems: CanvasTextItemState[];
+}
+
+interface CanvasDrawItemState {
+  id: string;
+  shape: CanvasDrawShape;
+  rect: { x: number; y: number; width: number; height: number };
+  style: CanvasDrawStyle;
+}
+
+interface CanvasTextItemState {
+  id: string;
+  text: string;
+  style: CanvasTextStyle;
+}
+
+interface ActorOverlayCommand {
+  op: "spawn" | "show" | "move" | "click" | "drag" | "scroll" | "thinkStart" | "thinkStop" | "narrate" | "dismiss" | "kill" | "cancel" | "draw" | "text" | "clear";
+  name: string;
+  type?: ActorType;
+  position?: { x: number; y: number };
+  to?: { x: number; y: number };
+  rect?: { x: number; y: number; width: number; height: number };
+  box?: { x: number; y: number; width: number; height: number };
+  durationMs?: number;
+  style?: string;
+  button?: string;
+  dx?: number;
+  dy?: number;
+  text?: string;
+  shape?: CanvasDrawShape;
+  font?: string;
+  size?: number;
+  color?: string;
+  highlight?: string;
+  padding?: number;
+  roughness?: number;
+  opacity?: number;
+  id?: string;
 }
 
 export interface ActorRuntimeDeps {
   getDisplays(): DisplayInfo[];
+  getMousePosition?(): { x: number; y: number } | null;
   postOverlay(kind: string, payload: string): void;
 }
 
@@ -103,22 +135,40 @@ export class ActorRuntime {
     }
 
     const space = makeActorDisplaySpace(this.deps.getDisplays());
-    const position = primaryCenter(space);
+    const position = request.type === "canvas"
+      ? this.deps.getMousePosition?.() ?? primaryCenter(space)
+      : primaryCenter(space);
     const actor: ActorState = {
       name: request.name,
       type: request.type,
       durationScale: request.durationScale,
       position,
       hidden: false,
+      canvas: request.type === "canvas"
+        ? {
+            nextItemIndex: 0,
+            drawItems: [],
+            textItems: [],
+          }
+        : undefined,
     };
     this.actors.set(actor.name, actor);
-    this.post({
-      op: "spawn",
-      name: actor.name,
-      type: actor.type,
-      position,
-      durationMs: this.scaleDuration(actor, 180),
-    });
+    if (actor.type === "pointer") {
+      this.post({
+        op: "spawn",
+        name: actor.name,
+        type: actor.type,
+        position,
+        durationMs: this.scaleDuration(actor, 180),
+      });
+    } else {
+      this.post({
+        op: "spawn",
+        name: actor.name,
+        type: actor.type,
+        position,
+      });
+    }
     return {
       ok: true,
       name: actor.name,
@@ -134,7 +184,12 @@ export class ActorRuntime {
     }
 
     actor.activeRun?.controller.abort(new ActorApiError("run_canceled", `Run canceled for actor '${name}'`));
-    this.post({ op: "kill", name });
+    if (actor.type === "pointer") {
+      this.post({ op: "kill", name });
+    } else {
+      this.clearCanvas(actor);
+      this.post({ op: "kill", name, type: "canvas" });
+    }
     this.actors.delete(name);
     return { ok: true, name, killed: true };
   }
@@ -175,6 +230,17 @@ export class ActorRuntime {
   }
 
   private validateAction(actor: ActorState, action: ActorAction): void {
+    if (actor.type === "canvas") {
+      switch (action.kind) {
+        case "draw":
+        case "text":
+        case "clear":
+          return;
+        default:
+          throw new ActorApiError("unknown_action", `Unknown action: ${action.kind}`);
+      }
+    }
+
     const space = makeActorDisplaySpace(this.deps.getDisplays());
     switch (action.kind) {
       case "move":
@@ -203,10 +269,17 @@ export class ActorRuntime {
         return;
       case "dismiss":
         return;
+      default:
+        throw new ActorApiError("unknown_action", `Unknown action: ${action.kind}`);
     }
   }
 
   private async execute(actor: ActorState, action: ActorAction, signal: AbortSignal): Promise<void> {
+    if (actor.type === "canvas") {
+      await this.executeCanvas(actor, action);
+      return;
+    }
+
     switch (action.kind) {
       case "move":
         await this.ensureVisible(actor, signal);
@@ -288,6 +361,89 @@ export class ActorRuntime {
           actor.hidden = true;
         }
         return;
+      case "draw":
+      case "text":
+      case "clear":
+        throw new ActorApiError("unknown_action", `Unknown action: ${action.kind}`);
+    }
+  }
+
+  private async executeCanvas(actor: ActorState, action: ActorAction): Promise<void> {
+    if (!actor.canvas) {
+      throw new ActorApiError("actor_not_found", `No canvas state for actor '${actor.name}'`);
+    }
+
+    switch (action.kind) {
+      case "draw": {
+        const boxes = action.boxes ?? (action.box ? [action.box] : undefined);
+        if (boxes && boxes.length > 0) {
+          for (const box of boxes) {
+            const item = this.nextCanvasDrawItem(actor, undefined, action.shape, action.style, box);
+            actor.canvas.drawItems.push(item);
+            this.post({
+              op: "draw",
+              type: "canvas",
+              name: actor.name,
+              id: item.id,
+              shape: action.shape,
+              box: item.rect,
+              padding: action.style.padding,
+              size: action.style.size,
+              color: action.style.color,
+              roughness: this.canvasRoughness(actor, action.style, item.rect),
+              opacity: 1,
+            });
+          }
+          return;
+        }
+        const position = this.resolveCanvasPosition(actor);
+        const item = this.nextCanvasDrawItem(actor, position, action.shape, action.style, undefined);
+        actor.canvas.drawItems.push(item);
+        this.post({
+          op: "draw",
+          type: "canvas",
+          name: actor.name,
+          id: item.id,
+          shape: action.shape,
+          box: item.rect,
+          position,
+          padding: action.style.padding,
+          size: action.style.size,
+          color: action.style.color,
+          roughness: this.canvasRoughness(actor, action.style, item.rect),
+          opacity: 1,
+        });
+        return;
+      }
+      case "text": {
+        const position = action.box ? undefined : this.resolveCanvasPosition(actor);
+        const item = this.nextCanvasTextItem(actor, action.text, action.style);
+        actor.canvas.textItems.push(item);
+        this.post({
+          op: "text",
+          type: "canvas",
+          name: actor.name,
+          id: item.id,
+          position,
+          text: action.text,
+          font: action.style.font,
+          size: action.style.size,
+          color: action.style.color,
+          highlight: action.style.highlight,
+          box: action.box,
+        });
+        return;
+      }
+      case "clear":
+        this.clearCanvas(actor);
+        this.post({
+          op: "clear",
+          type: "canvas",
+          name: actor.name,
+        });
+        return;
+      default:
+        throw new ActorApiError("unknown_action", `Unknown action: ${action.kind}`);
     }
   }
 
@@ -352,6 +508,68 @@ export class ActorRuntime {
 
   private narrateDuration(actor: ActorState, text: string): number {
     return this.scaleDuration(actor, clamp(900 + text.length * 35, 1200, 4200));
+  }
+
+  private nextCanvasDrawItem(
+    actor: ActorState,
+    position: { x: number; y: number } | undefined,
+    shape: CanvasDrawShape,
+    style: CanvasDrawStyle,
+    box?: CanvasBox,
+  ): CanvasDrawItemState {
+    const id = `${actor.name}.draw.${actor.canvas?.nextItemIndex ?? 0}`;
+    if (actor.canvas) {
+      actor.canvas.nextItemIndex += 1;
+    }
+    return {
+      id,
+      shape,
+      rect: box ?? this.canvasFallbackRect(position ?? actor.position, style),
+      style,
+    };
+  }
+
+  private nextCanvasTextItem(actor: ActorState, text: string, style: CanvasTextStyle): CanvasTextItemState {
+    const id = `${actor.name}.text.${actor.canvas?.nextItemIndex ?? 0}`;
+    if (actor.canvas) {
+      actor.canvas.nextItemIndex += 1;
+    }
+    return {
+      id,
+      text,
+      style,
+    };
+  }
+
+  private resolveCanvasPosition(actor: ActorState): { x: number; y: number } {
+    const mouse = this.deps.getMousePosition?.();
+    if (mouse) {
+      actor.position = { ...mouse };
+      return actor.position;
+    }
+    return actor.position;
+  }
+
+  private canvasFallbackRect(position: { x: number; y: number }, style: CanvasDrawStyle): { x: number; y: number; width: number; height: number } {
+    const size = Math.max(96, Math.round(style.size * 24));
+    return {
+      x: Math.round(position.x - size / 2),
+      y: Math.round(position.y - size / 2),
+      width: size,
+      height: size,
+    };
+  }
+
+  private canvasRoughness(actor: ActorState, style: CanvasDrawStyle, rect: { x: number; y: number; width: number; height: number }): number {
+    const seed = actor.name.length + style.size + style.padding + rect.x + rect.y + rect.width + rect.height;
+    return clamp(0.14 + (seed % 7) * 0.02, 0.14, 0.28);
+  }
+
+  private clearCanvas(actor: ActorState): void {
+    if (!actor.canvas) return;
+    actor.canvas.nextItemIndex = 0;
+    actor.canvas.drawItems = [];
+    actor.canvas.textItems = [];
   }
 
   private post(command: ActorOverlayCommand): void {

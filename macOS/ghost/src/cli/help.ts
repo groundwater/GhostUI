@@ -94,7 +94,7 @@ const HELP_TOPICS: HelpTopic[] = [
       "gui gfx outline -",
       "gui gfx scan [--duration <milliseconds>] -",
       "gui gfx xray [--duration <milliseconds>] -",
-      "gui gfx spotlight [--duration <milliseconds>] -",
+      "gui gfx spotlight [--color <css-color>] [--duration <milliseconds>] -",
       "gui gfx arrow [--color <css-color>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--target <anchor>] [--from <x> <y>] -",
       "gui gfx draw <shape> <x y width height | -> [--padding <pixels>] [--size <points>] [--color <css-color>] [--duration <milliseconds>] [--roughness <0..1>]",
     ],
@@ -102,7 +102,7 @@ const HELP_TOPICS: HelpTopic[] = [
       "gui ax query --only --app Terminal '@@{Button[subrole~=DecrementPage]}' | gui gfx outline -",
       "gui vat query 'Window[frame]' | gui gfx scan --duration 750 -",
       "gui vat query 'Window[frame]' | gui gfx xray -",
-      "gui vat query 'Window[frame]' | gui gfx spotlight --duration 900 -",
+      "gui vat query 'Window[frame]' | gui gfx spotlight --color 'rgba(0,0,0,0.35)' --duration 900 -",
       "gui vat query 'Window[frame]' | gui gfx arrow -",
       "gui vat query 'Window[frame]' | gui gfx draw check - --padding 8 --size 4 --color 'rgba(255,59,48,0.9)'",
     ],
@@ -111,7 +111,7 @@ const HELP_TOPICS: HelpTopic[] = [
       "`outline`, `xray`, `spotlight`, `arrow`, and stdin `draw` share the same target contract: VAT query payloads expand over every bounds-bearing descendant in deterministic traversal order, while AX payloads render once from their single target bounds.",
       "`scan` resolves the same AX/VAT bounds but only drives the red scan-line overlay; it does not add outline/highlight rects.",
       "`spotlight` does not outline the target. It computes the union of all resolved bounds and dims the complement outside that union.",
-      "`spotlight` accepts --duration and defaults to 1200ms, matching the other non-scan/xray overlay lifetimes.",
+      "`spotlight` accepts --color and --duration, defaults to color `rgba(0,0,0,.5)`, and uses 1200ms like the other non-scan/xray overlay lifetimes.",
       "`arrow` defaults to color `#FF3B30`, size `6`, length `100`, duration `400`, and target `center`. Use --target with center, topleft, topright, bottomleft, bottomright, left, top, right, or bottom to pick the anchor point on the resolved target rect. Use --from <x> <y> to override the starting point and ignore --length.",
       "`draw` renders marker-style shapes with native-backed roughness and reveal behavior. It accepts rect, circ, check, cross, and underline. Pass literal screen coordinates as `x y width height` or stdin `-` to reuse AX/VAT resolution.",
       AX_TARGET_BEARING_JSON_TYPE_NOTE,
@@ -212,21 +212,26 @@ const HELP_TOPICS: HelpTopic[] = [
     aliases: [],
     usage: [
       "gui actor spawn pointer <name> [--duration-scale <scale>]",
+      "gui actor spawn canvas <name>",
       "gui actor run <name>.<action> ...",
       "gui actor kill <name>",
       "gui actor list",
     ],
     examples: [
       "gui actor spawn pointer pointer.main",
+      "gui actor spawn canvas canvas.notes",
       "gui actor run pointer.main.move --to 840 420 --style purposeful",
       "gui actor run pointer.main.click --at 840 420",
       "gui actor run pointer.main.narrate --text \"Opening Settings\"",
+      "gui actor run canvas.notes.draw rect",
       "gui actor kill pointer.main",
     ],
     notes: [
       "Actors are overlay-only animation objects. They do not move the real cursor or emit OS input.",
       "A newer run on the same actor preempts the older in-flight action.",
       "durationScale 0 is valid for tests and makes actions complete immediately.",
+      "Canvas actors retain marker and text items until gui actor run <name>.clear or gui actor kill <name>.",
+      "Bare gui actor run <name> resolves the actor type when possible and prints type-appropriate usage.",
     ],
     related: ["display", "output"],
   },
@@ -235,12 +240,27 @@ const HELP_TOPICS: HelpTopic[] = [
     title: "Spawn an actor",
     summary: "Create a named daemon-owned actor instance.",
     aliases: [],
-    usage: ["gui actor spawn pointer <name> [--duration-scale <scale>]"],
+    usage: ["gui actor spawn pointer <name> [--duration-scale <scale>]", "gui actor spawn canvas <name>"],
     examples: [
       "gui actor spawn pointer pointer.main",
+      "gui actor spawn canvas canvas.notes",
       "gui actor spawn pointer pointer.main --duration-scale 0",
     ],
     related: ["actor", "actor run", "actor kill", "actor list"],
+  },
+  {
+    id: "actor spawn canvas",
+    title: "Spawn a canvas actor",
+    summary: "Create a named persistent canvas actor instance.",
+    aliases: [],
+    usage: ["gui actor spawn canvas <name>"],
+    examples: [
+      "gui actor spawn canvas canvas.notes",
+    ],
+    notes: [
+      "Canvas actors retain marker and text items until they are explicitly cleared or killed.",
+    ],
+    related: ["actor spawn", "actor run draw", "actor run text", "actor run clear"],
   },
   {
     id: "actor list",
@@ -272,18 +292,78 @@ const HELP_TOPICS: HelpTopic[] = [
       "gui actor run <name>.scroll --dx <n> --dy <n> [--timeout <ms>]",
       "gui actor run <name>.think [--for <ms>] [--timeout <ms>]",
       "gui actor run <name>.narrate --text \"<text>\" [--timeout <ms>]",
+      "gui actor run <name>.draw <rect|circ|check|cross|underline> [--padding <pixels>] [--size <points>] [--color <css-color>] [--box <x y width height> | -]",
+      "gui actor run <name>.text <Text> [--font <name>] [--size <pt>] [--color <css-color>] [--highlight <css-color|none>] [--box <x y width height> | -]",
+      "gui actor run <name>.clear",
       "gui actor run <name>.dismiss [--timeout <ms>]",
     ],
     examples: [
       "gui actor run pointer.main.move --to 840 420",
       "gui actor run pointer.main.click --button right",
       "gui actor run pointer.main.narrate --text \"Opening Settings\"",
+      "gui vat query 'Window[frame]' | gui actor run canvas.notes.draw check --padding 8 --size 4 --color 'rgba(255,59,48,0.9)' -",
+      "gui actor run canvas.notes.draw rect 100 120 240 180 --padding 8 --size 4 --color '#FF3B30'",
+      "gui actor run canvas.notes.text \"Working set\" --size 36 --color '#FF3B30' --highlight 'rgba(255,255,0,0.35)' --box 100 120 240 180",
     ],
     notes: [
       "Use --help or -h at any actor leaf to get the nearest specific actor usage.",
       "A newer run on the same actor preempts the older in-flight action.",
+      "Canvas draw and text actions persist until gui actor run <name>.clear or gui actor kill <name>.",
+      "Bare gui actor run <name> resolves the actor type when possible and prints type-appropriate usage.",
     ],
-    related: ["actor", "actor run move", "actor run click", "actor run drag", "actor run scroll", "actor run think", "actor run narrate", "actor run dismiss"],
+    related: ["actor", "actor run move", "actor run click", "actor run drag", "actor run scroll", "actor run think", "actor run narrate", "actor run draw", "actor run text", "actor run clear", "actor run dismiss"],
+  },
+  {
+    id: "actor run draw",
+    title: "Run canvas draw",
+    summary: "Retain a marker-style canvas shape on the named canvas actor.",
+    aliases: [],
+    usage: ["gui actor run <name>.draw <rect|circ|check|cross|underline> [--padding <pixels>] [--size <points>] [--color <css-color>] [--box <x y width height> | -]"],
+    examples: [
+      "gui actor run canvas.notes.draw check --padding 8 --size 4 --color 'rgba(255,59,48,0.9)'",
+      "gui vat query 'Window[frame]' | gui actor run canvas.notes.draw underline --size 5 -",
+      "gui actor run canvas.notes.draw underline --color '#ff00ff'",
+    ],
+    notes: [
+      "Pass `-` to read one AX/VAT target-bearing payload from stdin and render the marker shape over every resolved bounds rectangle.",
+      "Use --box <x y width height> for an explicit target box when you already know the coordinates.",
+      "Colors accept #rgb, #rgba, #rrggbb, #rrggbbaa, rgb(), and rgba().",
+      "The marker shape is retained by the canvas actor until cleared or killed.",
+    ],
+    related: ["actor run", "actor spawn canvas"],
+  },
+  {
+    id: "actor run text",
+    title: "Run canvas text",
+    summary: "Retain a text annotation on the named canvas actor.",
+    aliases: [],
+    usage: ["gui actor run <name>.text <Text> [--font <name>] [--size <pt>] [--color <css-color>] [--highlight <css-color|none>] [--box <x y width height> | -]"],
+    examples: [
+      "gui actor run canvas.notes.text \"Working set\" --size 36 --color '#FF3B30'",
+      "gui actor run canvas.notes.text \"Ready\" --font \"SF Pro Text\" --highlight 'rgba(255,255,0,0.35)'",
+    ],
+    notes: [
+      "Text is retained by the canvas actor until cleared or killed.",
+      "Use --highlight none to disable the background highlight.",
+      "Pass `-` to read one AX/VAT target-bearing payload from stdin and use its bounds as the box. Multi-bounds VAT payloads are rejected instead of being truncated.",
+      "Use --box <x y width height> for an explicit target box when you already know the coordinates.",
+      "Colors accept #rgb, #rgba, #rrggbb, #rrggbbaa, rgb(), and rgba().",
+    ],
+    related: ["actor run", "actor spawn canvas"],
+  },
+  {
+    id: "actor run clear",
+    title: "Clear a canvas actor",
+    summary: "Remove all retained canvas items without killing the actor.",
+    aliases: [],
+    usage: ["gui actor run <name>.clear"],
+    examples: [
+      "gui actor run canvas.notes.clear",
+    ],
+    notes: [
+      "Only canvas items are cleared. The actor remains spawned and reusable.",
+    ],
+    related: ["actor run", "actor spawn canvas"],
   },
   {
     id: "actor run move",
@@ -1743,6 +1823,9 @@ function normalizeActorHelpTokens(tokens: string[]): string[] {
   }
 
   if (tokens[1] === "spawn") {
+    if (tokens[2] === "canvas") {
+      return ["actor", "spawn", "canvas"];
+    }
     return ["actor", "spawn"];
   }
 

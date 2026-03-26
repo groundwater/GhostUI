@@ -281,6 +281,10 @@ describe("draw script spotlight normalization", () => {
             cornerRadius: 18,
             opacity: 1,
           },
+          animation: {
+            durMs: 200,
+            ease: "easeInOut",
+          },
         },
       ],
     });

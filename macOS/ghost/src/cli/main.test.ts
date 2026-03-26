@@ -72,12 +72,16 @@ import {
   formatVatMountError,
   parseGfxArrowOptions,
   parseGfxDuration,
+  parseGfxSpotlightOptions,
   parseGfxMarkerOptions,
+  resolveActorRunInvocation,
 } from "./main.js";
+import { waitForDrawOverlayAttachment } from "./draw-stream.js";
 import {
   buildCLICompositionPayloadFromAXQueryMatch,
   buildCLICompositionPayloadFromVatQueryResult,
   normalizeCLICompositionPayload,
+  readFirstJSONFrame,
   parseSingleCLICompositionPayload,
 } from "./payload.js";
 import { filterTree } from "./filter.js";
@@ -91,14 +95,19 @@ type TailVatWatchStream = (
   writer?: (chunk: string) => Promise<void>,
 ) => Promise<void>;
 
-function streamFromChunks(chunks: string[]): ReadableStream<Uint8Array> {
+function streamFromChunks(
+  chunks: string[],
+  options: { closeWhenDone?: boolean } = {},
+): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   return new ReadableStream({
     start(controller) {
       for (const chunk of chunks) {
         controller.enqueue(encoder.encode(chunk));
       }
-      controller.close();
+      if (options.closeWhenDone !== false) {
+        controller.close();
+      }
     },
   });
 }
@@ -989,7 +998,42 @@ describe("actor run usage rendering", () => {
     const usage = renderActorRunUsage("p");
     expect(usage).toContain("gui actor run p.move");
     expect(usage).toContain("gui actor run p.click");
+    expect(usage).toContain("gui actor run p.draw");
+    expect(usage).toContain("gui actor run p.text");
+    expect(usage).toContain("gui actor run p.clear");
     expect(usage).not.toContain("gui actor run <name>.move");
+  });
+
+  test("keeps bare canvas actor names from being reinterpreted as name.action tokens", async () => {
+    await expect(resolveActorRunInvocation("test.canvas", [], "canvas")).resolves.toEqual({
+      name: "test.canvas",
+    });
+    await expect(resolveActorRunInvocation("test.canvas", [], undefined)).resolves.toEqual({
+      name: "test.canvas",
+    });
+    await expect(resolveActorRunInvocation("test.canvas.draw", ["-"], undefined)).resolves.toEqual({
+      name: "test.canvas",
+      actionName: "draw",
+    });
+  });
+
+  test("parses dotted actor/action names even when the base actor has not been listed yet", async () => {
+    await expect(resolveActorRunInvocation("main.clear", [], undefined)).resolves.toEqual({
+      name: "main",
+      actionName: "clear",
+    });
+    await expect(resolveActorRunInvocation("main.draw", ["circ", "-"], undefined)).resolves.toEqual({
+      name: "main",
+      actionName: "draw",
+    });
+  });
+
+  test("renders canvas-specific actor run usage when the actor type is known", () => {
+    const usage = renderActorRunUsage("canvas.notes", "canvas");
+    expect(usage).toContain("gui actor run canvas.notes.draw <rect|circ|check|cross|underline> [--padding <pixels>] [--size <points>] [--color <css-color>] [--box <x y width height> | -]");
+    expect(usage).toContain("gui actor run canvas.notes.text <Text> [--font <name>] [--size <pt>] [--color <css-color>] [--highlight <css-color|none>] [--box <x y width height> | -]");
+    expect(usage).toContain("gui actor run canvas.notes.clear");
+    expect(usage).not.toContain("gui actor run canvas.notes.move");
   });
 });
 
@@ -1325,16 +1369,23 @@ describe("ca highlight AX bridge", () => {
           { x: 400, y: 50, width: 320, height: 220 },
         ],
         style: {
-          fill: "#000000B8",
+          fill: "rgba(0,0,0,.5)",
           cornerRadius: 18,
           opacity: 1,
+        },
+        animation: {
+          durMs: 200,
+          ease: "easeInOut",
         },
       },
     ]);
   });
 
-  test("builds gfx spotlight draw scripts with an explicit duration", () => {
-    const script = buildGfxSpotlightDrawScriptFromText(JSON.stringify(target), 900);
+  test("builds gfx spotlight draw scripts with an explicit duration and color", () => {
+    const script = buildGfxSpotlightDrawScriptFromText(JSON.stringify(target), {
+      durationMs: 900,
+      color: "rgba(255, 59, 48, 0.35)",
+    });
 
     expect(script.timeout).toBe(900);
     expect(script.items).toEqual([
@@ -1344,12 +1395,106 @@ describe("ca highlight AX bridge", () => {
           { x: 100, y: 100, width: 80, height: 40 },
         ],
         style: {
-          fill: "#000000B8",
+          fill: "rgba(255, 59, 48, 0.35)",
           cornerRadius: 18,
           opacity: 1,
         },
+        animation: {
+          durMs: 200,
+          ease: "easeInOut",
+        },
       },
     ]);
+  });
+
+  test("parses gfx spotlight options and strips consumed flags", () => {
+    const args = ["--color", "rgba(255, 59, 48, 0.35)", "--duration", "900", "-"];
+    expect(parseGfxSpotlightOptions(args, "gfx spotlight")).toEqual({
+      color: "rgba(255, 59, 48, 0.35)",
+      durationMs: 900,
+    });
+    expect(args).toEqual(["-"]);
+  });
+
+  test("reads one gfx payload frame from stdin without waiting for EOF", async () => {
+    const payloadLine = `${JSON.stringify(buildCLICompositionPayloadFromAXQueryMatch({
+      type: "ax.query-match",
+      pid: 42,
+      node: { _tag: "AXButton", _id: "Save" },
+      target,
+    }))}\n`;
+
+    const result = await Promise.race([
+      readFirstJSONFrame(streamFromChunks([payloadLine], { closeWhenDone: false })),
+      Bun.sleep(50).then(() => "__timeout__"),
+    ]);
+
+    expect(result).toBe(payloadLine.trimEnd());
+    expect(parseSingleCLICompositionPayload(result, "gfx arrow")).toMatchObject({
+      type: "gui.payload",
+      source: "ax.query-match",
+      target,
+    });
+  });
+
+  test("reads pretty-printed gfx payload frames without waiting for EOF", async () => {
+    const payload = buildCLICompositionPayloadFromAXQueryMatch({
+      type: "ax.query-match",
+      pid: 42,
+      node: { _tag: "AXButton", _id: "Save" },
+      target,
+    });
+    const prettyPrintedPayload = JSON.stringify(payload, null, 2);
+
+    const result = await Promise.race([
+      readFirstJSONFrame(streamFromChunks([
+        prettyPrintedPayload.slice(0, 32),
+        prettyPrintedPayload.slice(32),
+      ], { closeWhenDone: false })),
+      Bun.sleep(50).then(() => "__timeout__"),
+    ]);
+
+    expect(result).toBe(prettyPrintedPayload);
+    expect(buildGfxOutlineDrawScriptFromText(result)).toMatchObject({
+      coordinateSpace: "screen",
+      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+    });
+  });
+
+  test("delays gfx spotlight passthrough until the reveal duration elapses, even with a long timeout", async () => {
+    const writes: string[] = [];
+    const spotlightPayload = buildGfxSpotlightDrawScriptFromText(JSON.stringify(target), {
+      durationMs: 6000,
+    });
+    expect(spotlightPayload.timeout).toBe(6000);
+    const spotlightItem = spotlightPayload.items.find(item => item.kind === "spotlight");
+    expect(spotlightItem).toBeDefined();
+    expect(spotlightItem?.animation).toEqual({
+      durMs: 200,
+      ease: "easeInOut",
+    });
+    if (!spotlightItem?.animation) {
+      throw new Error("spotlight animation is required");
+    }
+    spotlightItem.animation.durMs = 20;
+    const revealDurationMs = spotlightItem.animation.durMs;
+
+    const abortController = new AbortController();
+    const promise = waitForDrawOverlayAttachment(new Response(streamFromChunks(["attached\n"]), {
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    }), abortController.signal, {
+      async onAttached() {
+        await Bun.sleep(revealDurationMs);
+        writes.push("payload");
+      },
+    });
+
+    await Bun.sleep(5);
+    expect(writes).toEqual([]);
+    await Bun.sleep(revealDurationMs + 25);
+    expect(writes).toEqual(["payload"]);
+    abortController.abort();
+    await promise;
   });
 
   test("builds gfx arrow draw scripts with animated red defaults", () => {
