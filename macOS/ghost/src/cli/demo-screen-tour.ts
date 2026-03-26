@@ -398,9 +398,10 @@ class DemoScreenTour {
         await this.pointerMove(state.titleBar.x + state.titleBar.width / 2, state.titleBar.y + state.titleBar.height / 2, "purposeful");
         await this.sleep(400);
         await this.canvasClear();
+        await this.spotlightColor('rgba(0,0,0,.9)')
         await this.spotlightRect(state.window, {
-          padding: 8,
-          blur: 16,
+          // padding: 8,
+          // blur: 16,
         });
         await this.pointerNarrate(
           state.index === 0
