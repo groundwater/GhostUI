@@ -1,4 +1,4 @@
-.PHONY: help generate release debug clean icon native
+.PHONY: help generate release debug clean icon native test test-e2e
 
 -include .env
 export
@@ -10,6 +10,7 @@ PROJECT = GhostUI.xcodeproj
 DERIVED_DATA = .build/xcode
 DEBUG_APP = $(DERIVED_DATA)/Build/Products/Debug/GhostUI.app
 RELEASE_APP = $(DERIVED_DATA)/Build/Products/Release/GhostUI.app
+TEST_E2E_GUI = $(abspath .build/GhostUI.app/Contents/Helpers/GhostUICLI.app/Contents/MacOS/gui)
 
 # Icon generation
 ICON_SOURCE = macOS/GhostUI/Resources/Icon/GhostUIIcon-final.png
@@ -24,6 +25,8 @@ help:
 	@echo "  release   Build GhostUI (release)"
 	@echo "  debug     Build GhostUI (debug)"
 	@echo "  native    Build N-API accessibility module"
+	@echo "  test      Run the standard GhostUI TypeScript verification flow"
+	@echo "  test-e2e  Run the live gated CLI pipeline e2e matrix"
 	@echo "  icon      Generate AppIcon.icns from source PNG"
 	@echo "  clean     Remove build artifacts"
 	@echo ""
@@ -70,6 +73,17 @@ native:
 	mkdir -p macOS/ghost/native/build/Release/.deps/Release/obj.target/ghostui_ax
 	cd macOS/ghost/native && npm run build
 	@echo "N-API module built: macOS/ghost/native/build/Release/ghostui_ax.node"
+
+test:
+	cd macOS/ghost && bun x tsc --noEmit
+	cd macOS/ghost && bun test src/server/routes.test.ts src/cli/filter.test.ts src/ax-event-policy.test.ts src/cli/main.test.ts src/cli/pipeline.test.ts src/cli/pipeline.process-e2e.test.ts
+
+test-e2e:
+	test -x "$(TEST_E2E_GUI)" || (echo "Bundled gui helper missing at $(TEST_E2E_GUI). Build GhostUI.app first."; exit 1)
+	cd macOS/ghost && GHOSTUI_ENABLE_LIVE_PIPE_TESTS=1 GHOSTUI_TEST_GUI_PATH="$(TEST_E2E_GUI)" bun test --max-concurrency=1 --timeout=15000 src/cli/pipeline.live-e2e.test.ts
+	cd macOS/ghost && GHOSTUI_ENABLE_LIVE_PIPE_TESTS=1 GHOSTUI_TEST_GUI_PATH="$(TEST_E2E_GUI)" bun test --max-concurrency=1 --timeout=15000 src/cli/pipeline.live-gfx-e2e.test.ts
+	cd macOS/ghost && GHOSTUI_ENABLE_LIVE_PIPE_TESTS=1 GHOSTUI_TEST_GUI_PATH="$(TEST_E2E_GUI)" bun test --max-concurrency=1 --timeout=15000 src/cli/pipeline.live-chain-e2e.test.ts
+	cd macOS/ghost && GHOSTUI_ENABLE_LIVE_PIPE_TESTS=1 GHOSTUI_TEST_GUI_PATH="$(TEST_E2E_GUI)" bun test --max-concurrency=1 --timeout=15000 src/cli/pipeline.live-window-e2e.test.ts
 
 release: icon generate
 	$(XCODEBUILD) -project $(PROJECT) -scheme $(SCHEME) -configuration Release -destination 'generic/platform=macOS' -allowProvisioningUpdates -allowProvisioningDeviceRegistration -derivedDataPath $(DERIVED_DATA) build

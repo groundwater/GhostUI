@@ -1973,6 +1973,9 @@ async function runGfxScanFromText(
   durationMs = DEFAULT_GFX_SCAN_DURATION_MS,
 ): Promise<void> {
   const request = buildGfxScanOverlayRequestFromText(input, durationMs);
+  if (process.env.GHOSTUI_TEST_SKIP_OVERLAY === "1") {
+    return;
+  }
   await postScanOverlay(request.rects, request.durationMs);
 }
 
@@ -2266,6 +2269,10 @@ export async function attachDrawOverlay(
   payload: DrawScript,
   options: AttachDrawOverlayOptions = {},
 ): Promise<void> {
+  if (process.env.GHOSTUI_TEST_SKIP_OVERLAY === "1") {
+    await options.onAttached?.(new AbortController().signal);
+    return;
+  }
   const drawAbort = new AbortController();
   const onAbort = () => {
     if (!drawAbort.signal.aborted) {
