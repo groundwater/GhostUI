@@ -16,9 +16,7 @@
 
 import { existsSync } from "fs";
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
+type Bounds = { x: number; y: number; width: number; height: number };
 
 const GUI_PATH = process.env.GHOSTUI_TEST_GUI_PATH?.trim() ?? "";
 if (!GUI_PATH || !existsSync(GUI_PATH)) {
@@ -33,15 +31,72 @@ const DURATION_S = Number(process.env.DEMO_DURATION_S) || 600;
 
 const INTERRUPT_ERROR_MESSAGE = "Demo tour interrupted";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+interface GuiResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
 
-let activeGuiProc: Bun.Subprocess | null = null;
-let interruptReject: ((error: Error) => void) | null = null;
-const interruptPromise = new Promise<never>((_, reject) => {
-  interruptReject = reject;
-});
+interface AXTarget {
+  type: "ax.target";
+  pid: number;
+  point: { x: number; y: number };
+  bounds?: Bounds;
+  role: string;
+  subrole?: string | null;
+  title?: string | null;
+  label?: string | null;
+}
+
+interface AXPayload {
+  type: "gui.payload";
+  target?: AXTarget;
+  bounds?: Bounds;
+  point?: { x: number; y: number };
+  node?: { _tag?: string; _id?: string; _displayName?: string };
+}
+
+interface PayloadMatch {
+  payload: AXPayload;
+  rawText: string;
+}
+
+interface DemoScreenTourOptions {
+  guiPath: string;
+  pauseScale: number;
+  maxWindows: number;
+  maxControls: number;
+  durationSeconds: number;
+  pointerName: string;
+  canvasName: string;
+  env: NodeJS.ProcessEnv;
+}
+
+interface AXQueryOptions {
+  query: string;
+  focused?: boolean;
+  all?: boolean;
+  first?: boolean;
+  json?: boolean;
+  ndjson?: boolean;
+  pid?: number;
+}
+
+interface DrawStyle {
+  padding?: number;
+  size?: number;
+  color?: string;
+}
+
+interface WindowTourState {
+  window: AXNode;
+  index: number;
+  total: number;
+  title: string;
+  pid?: number;
+  bounds: Bounds;
+  titleBar: Bounds;
+}
 
 function interruptError(): Error {
   return new Error(INTERRUPT_ERROR_MESSAGE);
@@ -49,64 +104,6 @@ function interruptError(): Error {
 
 function isInterruptError(error: unknown): boolean {
   return error instanceof Error && error.message === INTERRUPT_ERROR_MESSAGE;
-}
-
-function requestInterrupt(signal: "SIGINT" | "SIGTERM"): void {
-  log(`${signal} received; stopping the tour and cleaning up actors.`);
-  activeGuiProc?.kill();
-  activeGuiProc = null;
-  interruptReject?.(interruptError());
-  interruptReject = null;
-}
-
-process.once("SIGINT", () => requestInterrupt("SIGINT"));
-process.once("SIGTERM", () => requestInterrupt("SIGTERM"));
-
-function sleep(ms: number): Promise<void> {
-  return Promise.race([
-    new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms * PAUSE_SCALE))),
-    interruptPromise,
-  ]);
-}
-
-interface GuiResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-}
-
-async function guiWithInput(stdinText: string, ...args: string[]): Promise<GuiResult> {
-  const proc = Bun.spawn({
-    cmd: [GUI_PATH, ...args],
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-    env: process.env,
-  });
-  activeGuiProc = proc;
-  try {
-    if (stdinText.length > 0) {
-      proc.stdin.write(stdinText);
-    }
-    proc.stdin.end();
-    const [stdout, stderr, exitCode] = await Promise.race([
-      Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ]),
-      interruptPromise,
-    ]);
-    return { exitCode, stdout: stdout.trim(), stderr: stderr.trim() };
-  } finally {
-    if (activeGuiProc === proc) {
-      activeGuiProc = null;
-    }
-  }
-}
-
-async function gui(...args: string[]): Promise<GuiResult> {
-  return guiWithInput("", ...args);
 }
 
 function parseJSON<T>(text: string): T {
@@ -118,202 +115,13 @@ function log(msg: string): void {
   console.log(`[${ts}] ${msg}`);
 }
 
-// ---------------------------------------------------------------------------
-// AX query types (minimal subset)
-// ---------------------------------------------------------------------------
-
-interface AXTarget {
-  type: "ax.target";
-  pid: number;
-  point: { x: number; y: number };
-  bounds?: { x: number; y: number; width: number; height: number };
-  role: string;
-  subrole?: string | null;
-  title?: string | null;
-  label?: string | null;
-}
-
-interface AXPayload {
-  type: "gui.payload";
-  target?: AXTarget;
-  bounds?: { x: number; y: number; width: number; height: number };
-  point?: { x: number; y: number };
-  node?: { _tag?: string; _id?: string; _displayName?: string };
-}
-
-interface PayloadMatch {
-  payload: AXPayload;
-  rawText: string;
-}
-
-function payloadBox(payload: AXPayload): { x: number; y: number; width: number; height: number } | null {
+function payloadBox(payload: AXPayload): Bounds | null {
   return payload.target?.bounds ?? payload.bounds ?? null;
 }
 
-function sameBounds(
-  left: AXPayload["bounds"] | undefined,
-  right: AXPayload["bounds"] | undefined,
-): boolean {
+function sameBounds(left: Bounds | undefined, right: Bounds | undefined): boolean {
   if (!left || !right) return false;
   return left.x === right.x && left.y === right.y && left.width === right.width && left.height === right.height;
-}
-
-// ---------------------------------------------------------------------------
-// Actor management
-// ---------------------------------------------------------------------------
-
-const POINTER_NAME = `demo.pointer.${Date.now()}`;
-const CANVAS_NAME = `demo.canvas.${Date.now()}`;
-
-async function spawnActors(): Promise<void> {
-  const pRes = await gui("actor", "spawn", "pointer", POINTER_NAME);
-  if (pRes.exitCode !== 0) throw new Error(`Failed to spawn pointer: ${pRes.stderr}`);
-  log(`Spawned pointer actor: ${POINTER_NAME}`);
-
-  const cRes = await gui("actor", "spawn", "canvas", CANVAS_NAME);
-  if (cRes.exitCode !== 0) throw new Error(`Failed to spawn canvas: ${cRes.stderr}`);
-  log(`Spawned canvas actor: ${CANVAS_NAME}`);
-}
-
-async function killActors(): Promise<void> {
-  log("Cleaning up actors...");
-  await gui("actor", "kill", POINTER_NAME).catch(() => {});
-  await gui("actor", "kill", CANVAS_NAME).catch(() => {});
-  log("Actors cleaned up.");
-}
-
-// ---------------------------------------------------------------------------
-// Actor action wrappers
-// ---------------------------------------------------------------------------
-
-async function pointerMove(x: number, y: number, style: string = "purposeful"): Promise<void> {
-  await gui("actor", "run", `${POINTER_NAME}.move`, "--to", String(Math.round(x)), String(Math.round(y)), "--style", style);
-}
-
-async function pointerClick(x: number, y: number): Promise<void> {
-  await gui("actor", "run", `${POINTER_NAME}.click`, "--at", String(Math.round(x)), String(Math.round(y)));
-}
-
-async function pointerNarrate(text: string): Promise<void> {
-  await gui("actor", "run", `${POINTER_NAME}.narrate`, "--text", text);
-}
-
-async function pointerThink(ms: number): Promise<void> {
-  await gui("actor", "run", `${POINTER_NAME}.think`, "--for", String(Math.round(ms * PAUSE_SCALE)));
-}
-
-async function pointerDismiss(): Promise<void> {
-  await gui("actor", "run", `${POINTER_NAME}.dismiss`);
-}
-
-async function canvasDraw(
-  shape: string,
-  box: { x: number; y: number; width: number; height: number },
-  opts: { padding?: number; size?: number; color?: string } = {},
-): Promise<void> {
-  const args = [
-    "actor", "run", `${CANVAS_NAME}.draw`, shape,
-    "--box", String(Math.round(box.x)), String(Math.round(box.y)),
-    String(Math.round(box.width)), String(Math.round(box.height)),
-  ];
-  if (opts.padding != null) args.push("--padding", String(opts.padding));
-  if (opts.size != null) args.push("--size", String(opts.size));
-  if (opts.color) args.push("--color", opts.color);
-  await gui(...args);
-}
-
-async function canvasDrawFromPayload(
-  shape: string,
-  payloadText: string,
-  opts: { padding?: number; size?: number; color?: string } = {},
-): Promise<void> {
-  const args = ["actor", "run", `${CANVAS_NAME}.draw`, shape, "-"];
-  if (opts.padding != null) args.push("--padding", String(opts.padding));
-  if (opts.size != null) args.push("--size", String(opts.size));
-  if (opts.color) args.push("--color", opts.color);
-  await guiWithInput(payloadText, ...args);
-}
-
-async function canvasText(
-  text: string,
-  box: { x: number; y: number; width: number; height: number },
-  opts: { font?: string; size?: number; color?: string; highlight?: string } = {},
-): Promise<void> {
-  const args = [
-    "actor", "run", `${CANVAS_NAME}.text`, text, "literal",
-    "--box", String(Math.round(box.x)), String(Math.round(box.y)),
-    String(Math.round(box.width)), String(Math.round(box.height)),
-  ];
-  if (opts.font) args.push("--font", opts.font);
-  if (opts.size != null) args.push("--size", String(opts.size));
-  if (opts.color) args.push("--color", opts.color);
-  if (opts.highlight) args.push("--highlight", opts.highlight);
-  await gui(...args);
-}
-
-async function canvasClear(): Promise<void> {
-  await gui("actor", "run", `${CANVAS_NAME}.clear`);
-}
-
-function scaledEffectDuration(ms: number): string {
-  return String(Math.max(1, Math.round(ms * PAUSE_SCALE)));
-}
-
-async function discoverForegroundWindow(): Promise<PayloadMatch | null> {
-  const res = await gui("ax", "query", "--focused", "--json", "--first", "Window[frame]");
-  if (res.exitCode !== 0 || !res.stdout) {
-    log(`Foreground window discovery failed: ${res.stderr || "empty response"}`);
-    return null;
-  }
-  try {
-    const payload = parseJSON<AXPayload>(res.stdout);
-    if (payload.bounds && payload.bounds.width > 50 && payload.bounds.height > 50) {
-      return { payload, rawText: res.stdout };
-    }
-  } catch {
-    // ignored
-  }
-  return null;
-}
-
-async function discoverWindows(): Promise<PayloadMatch[]> {
-  const windows: PayloadMatch[] = [];
-  const focused = await discoverForegroundWindow();
-  if (focused) {
-    windows.push(focused);
-  }
-
-  const res = await gui("ax", "query", "--all", "--ndjson", "--each", "Application { Window[frame] }");
-  if (res.exitCode !== 0) {
-    log(`Background window discovery failed: ${res.stderr}`);
-    return windows;
-  }
-
-  const lines = res.stdout.split("\n").filter((l) => l.trim().length > 0);
-  for (const line of lines) {
-    try {
-      const payload = parseJSON<AXPayload>(line);
-      if (!payload.bounds || payload.bounds.width <= 50 || payload.bounds.height <= 50) {
-        continue;
-      }
-      if (windows.some((candidate) =>
-        candidate.payload.target?.pid === payload.target?.pid && sameBounds(candidate.payload.bounds, payload.bounds)
-      )) {
-        continue;
-      }
-      windows.push({ payload, rawText: line });
-    } catch {
-      // skip malformed lines
-    }
-  }
-  return windows;
-}
-
-interface ControlInfo {
-  payload: AXPayload;
-  rawText: string;
-  kind: string;
-  label: string;
 }
 
 function humanizeRole(role: string | undefined): string {
@@ -322,87 +130,6 @@ function humanizeRole(role: string | undefined): string {
   return cleaned.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
 }
 
-function buildControlInfo(payload: AXPayload, rawText: string, fallbackKind: string): ControlInfo {
-  const kind = humanizeRole(payload.target?.role || payload.node?._tag) || fallbackKind;
-  const label =
-    payload.target?.title ||
-    payload.target?.label ||
-    payload.node?._displayName ||
-    payload.node?._id ||
-    kind ||
-    fallbackKind;
-  return { payload, rawText, kind: kind || fallbackKind, label };
-}
-
-function controlKey(payload: AXPayload): string {
-  const bounds = payloadBox(payload);
-  const role = payload.target?.role || payload.node?._tag || "";
-  const label = payload.target?.title || payload.target?.label || payload.node?._displayName || payload.node?._id || "";
-  if (!bounds) {
-    return `${payload.target?.pid ?? "?"}:${role}:${label}`;
-  }
-  return [
-    payload.target?.pid ?? "?",
-    role,
-    label,
-    bounds.x,
-    bounds.y,
-    bounds.width,
-    bounds.height,
-  ].join(":");
-}
-
-async function discoverTargets(
-  pid: number,
-  query: string,
-  windowBounds: { x: number; y: number; width: number; height: number },
-  fallbackKind: string,
-  limit: number = MAX_CONTROLS,
-): Promise<ControlInfo[]> {
-  const controls: ControlInfo[] = [];
-  const seen = new Set<string>();
-  const res = await gui("ax", "query", "--pid", String(pid), "--ndjson", "--each", query);
-  if (res.exitCode !== 0) {
-    log(`AX discovery failed for "${query}": ${res.stderr || "empty response"}`);
-    return controls;
-  }
-  const lines = res.stdout.split("\n").filter((l) => l.trim().length > 0);
-  for (const line of lines) {
-    if (controls.length >= limit) break;
-    try {
-      const payload = parseJSON<AXPayload>(line);
-      const controlBox = payloadBox(payload);
-      if (!controlBox || controlBox.width < 10 || controlBox.height < 10) continue;
-      if (!boundsContainedIn(controlBox, windowBounds)) continue;
-      const key = controlKey(payload);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      controls.push(buildControlInfo(payload, line, fallbackKind));
-    } catch {
-      // skip malformed lines
-    }
-  }
-  return controls;
-}
-
-async function discoverButtons(
-  pid: number,
-  windowBounds: { x: number; y: number; width: number; height: number },
-): Promise<ControlInfo[]> {
-  return discoverTargets(pid, "Button[frame]", windowBounds, "button");
-}
-
-async function discoverActionControls(
-  pid: number,
-  windowBounds: { x: number; y: number; width: number; height: number },
-): Promise<ControlInfo[]> {
-  return discoverTargets(pid, "*[actions,frame,title,label]", windowBounds, "action control");
-}
-
-// ---------------------------------------------------------------------------
-// Narration helpers
-// ---------------------------------------------------------------------------
-
 function describeWindow(payload: AXPayload): string {
   const title = payload.target?.title || payload.node?._displayName || payload.node?._id || "unnamed window";
   const role = payload.target?.role || payload.node?._tag || "Window";
@@ -410,36 +137,20 @@ function describeWindow(payload: AXPayload): string {
   return `${title} (${role})`;
 }
 
-function describeControl(ctrl: ControlInfo): string {
-  if (ctrl.label && ctrl.label !== ctrl.kind) {
-    return `${ctrl.kind} "${ctrl.label}"`;
-  }
-  return ctrl.kind;
+function boxCenter(bounds: Bounds): { x: number; y: number } {
+  return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
 }
 
-function boxCenter(b: { x: number; y: number; width: number; height: number }): { x: number; y: number } {
-  return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-}
-
-function titleBarBox(b: { x: number; y: number; width: number; height: number }): {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-} {
+function titleBarBox(bounds: Bounds): Bounds {
   return {
-    x: b.x + 12,
-    y: b.y + 8,
-    width: Math.max(120, b.width - 24),
-    height: Math.min(42, Math.max(24, Math.round(b.height * 0.1))),
+    x: bounds.x + 12,
+    y: bounds.y + 8,
+    width: Math.max(120, bounds.width - 24),
+    height: Math.min(42, Math.max(24, Math.round(bounds.height * 0.1))),
   };
 }
 
-function boundsContainedIn(
-  inner: { x: number; y: number; width: number; height: number },
-  outer: { x: number; y: number; width: number; height: number },
-  tolerance = 12,
-): boolean {
+function boundsContainedIn(inner: Bounds, outer: Bounds, tolerance = 12): boolean {
   const innerRight = inner.x + inner.width;
   const innerBottom = inner.y + inner.height;
   const outerRight = outer.x + outer.width;
@@ -452,259 +163,562 @@ function boundsContainedIn(
   );
 }
 
-function circleBoxForBounds(
-  bounds: { x: number; y: number; width: number; height: number },
-  padding = 12,
-): { x: number; y: number; width: number; height: number } {
-  const center = boxCenter(bounds);
-  const diameter = Math.max(bounds.width, bounds.height) + padding;
-  return {
-    x: center.x - diameter / 2,
-    y: center.y - diameter / 2,
-    width: diameter,
-    height: diameter,
-  };
-}
+class AXNode {
+  constructor(private readonly match: PayloadMatch) {}
 
-function captionBoxForBounds(
-  bounds: { x: number; y: number; width: number; height: number },
-  opts: { preferredWidth?: number; yOffset?: number } = {},
-): { x: number; y: number; width: number; height: number } {
-  const preferredWidth = opts.preferredWidth ?? 420;
-  const width = Math.max(260, Math.min(preferredWidth, Math.max(bounds.width, 260)));
-  const height = 42;
-  const x = bounds.x + Math.max(0, (bounds.width - width) / 2);
-  const y = Math.max(0, bounds.y - height - (opts.yOffset ?? 12));
-  return { x, y, width, height };
-}
-
-async function gfxOutlineFromPayload(payloadText: string): Promise<void> {
-  await guiWithInput(payloadText, "gfx", "outline", "-");
-}
-
-async function gfxScanFromPayload(payloadText: string, durationMs = 900): Promise<void> {
-  await guiWithInput(payloadText, "gfx", "scan", "--duration", scaledEffectDuration(durationMs), "-");
-}
-
-async function gfxXrayFromPayload(payloadText: string, durationMs = 1100): Promise<void> {
-  await guiWithInput(payloadText, "gfx", "xray", "--duration", scaledEffectDuration(durationMs), "-");
-}
-
-function joinPayloadLines(items: Array<{ rawText: string }>): string {
-  return items.map((item) => item.rawText).join("\n");
-}
-
-async function highlightWindowTitle(windowMatch: PayloadMatch): Promise<void> {
-  await canvasDrawFromPayload("underline", windowMatch.rawText, {
-    padding: 2,
-    size: 5,
-    color: "rgba(59,130,246,0.85)",
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Tour phases
-// ---------------------------------------------------------------------------
-
-async function introPhase(): Promise<void> {
-  log("Starting intro phase");
-  await pointerNarrate("Welcome to the GhostUI screen tour!");
-  await sleep(2000);
-  await pointerNarrate("I'll start with the foreground window, then fan out to the rest of the screen.");
-  await sleep(2500);
-  await pointerDismiss();
-  await sleep(500);
-}
-
-async function beatSingleButton(button: ControlInfo, _title: string): Promise<void> {
-  const bounds = payloadBox(button.payload);
-  if (!bounds) return;
-  const center = boxCenter(bounds);
-  await canvasClear();
-  await canvasDrawFromPayload("circ", button.rawText, {
-    padding: 8,
-    size: 4,
-    color: "rgba(255,59,48,0.72)",
-  });
-  await pointerMove(center.x, center.y, "purposeful");
-  await sleep(300);
-  await pointerNarrate(`I can click this ${describeControl(button)}. This is visual-only, no real input is sent.`);
-  await sleep(1800);
-  await pointerClick(center.x, center.y);
-  await sleep(900);
-  await pointerDismiss();
-}
-
-async function beatAllButtons(buttons: ControlInfo[]): Promise<void> {
-  if (buttons.length === 0) return;
-  await canvasClear();
-  await gfxOutlineFromPayload(joinPayloadLines(buttons));
-  const anchor = payloadBox(buttons[0].payload);
-  if (anchor) {
-    const center = boxCenter(anchor);
-    await pointerMove(center.x, center.y, "purposeful");
-    await sleep(250);
-  }
-  await pointerNarrate("I can click ANY of these buttons. The outlines show every button I found in this window.");
-  await sleep(2200);
-  await pointerDismiss();
-}
-
-async function beatNoButtons(): Promise<void> {
-  await canvasClear();
-  await pointerNarrate("I don't see any buttons here, so I'll skip the click demo and keep scanning.");
-  await sleep(1800);
-  await pointerDismiss();
-}
-
-async function beatScanDeeper(windowMatch: PayloadMatch): Promise<void> {
-  await canvasClear();
-  await pointerNarrate("Hmm... let me scan deeper");
-  await gfxScanFromPayload(windowMatch.rawText, 900);
-  await gfxXrayFromPayload(windowMatch.rawText, 1100);
-  await sleep(250);
-  await pointerDismiss();
-}
-
-async function beatActionDiscovery(actionControls: ControlInfo[]): Promise<void> {
-  await canvasClear();
-  if (actionControls.length === 0) {
-    await pointerNarrate("Searching by actions did not reveal any additional controls in this window.");
-    await sleep(1800);
-    await pointerDismiss();
-    return;
+  get payload(): AXPayload {
+    return this.match.payload;
   }
 
-  await gfxOutlineFromPayload(joinPayloadLines(actionControls));
-  const anchor = payloadBox(actionControls[0].payload);
-  if (anchor) {
-    const center = boxCenter(anchor);
-    await pointerMove(center.x, center.y, "purposeful");
-    await sleep(250);
-  }
-  await pointerNarrate(
-    `There are also controls here. I searched by actions and outlined all ${actionControls.length} of them without sending real input.`,
-  );
-  await sleep(2200);
-  await pointerDismiss();
-}
-
-async function tourWindow(windowMatch: PayloadMatch, index: number, total: number): Promise<void> {
-  const payload = windowMatch.payload;
-  const bounds = payload.bounds!;
-  const title = describeWindow(payload);
-  const pid = payload.target?.pid;
-  const titleBar = titleBarBox(bounds);
-
-  log(`Touring window ${index + 1}/${total}: ${title}`);
-
-  await pointerMove(titleBar.x + titleBar.width / 2, titleBar.y + titleBar.height / 2, "purposeful");
-  await sleep(400);
-  await canvasClear();
-  await highlightWindowTitle(windowMatch);
-  await pointerNarrate(`Starting with the foreground window. This is "${title}".`);
-  await sleep(3000);
-  await pointerDismiss();
-  await sleep(300);
-
-  if (!pid) {
-    await pointerNarrate("I can't resolve a live process for this window, so I'll move on.");
-    await sleep(1800);
-    await pointerDismiss();
-    await canvasClear();
-    await sleep(500);
-    return;
+  get rawText(): string {
+    return this.match.rawText;
   }
 
-  const buttons = await discoverButtons(pid, bounds);
-  const buttonKeys = new Set(buttons.map((button) => controlKey(button.payload)));
-  const additionalActionControls = (await discoverActionControls(pid, bounds))
-    .filter((control) => !buttonKeys.has(controlKey(control.payload)));
-  if (buttons.length > 0) {
-    await beatSingleButton(buttons[0], title);
-    await sleep(250);
-    await beatAllButtons(buttons);
-  } else {
-    await beatNoButtons();
+  get bounds(): Bounds | null {
+    return payloadBox(this.match.payload);
   }
 
-  await sleep(250);
-  await beatScanDeeper(windowMatch);
-  await sleep(250);
-  await beatActionDiscovery(additionalActionControls);
+  get pid(): number | undefined {
+    return this.match.payload.target?.pid;
+  }
 
-  await canvasClear();
-  await sleep(500);
-}
+  get center(): { x: number; y: number } | null {
+    return this.bounds ? boxCenter(this.bounds) : null;
+  }
 
-async function outroPhase(windowCount: number): Promise<void> {
-  log("Starting outro phase");
-  await pointerNarrate(`Tour complete! I visited ${windowCount} window${windowCount !== 1 ? "s" : ""} on this screen.`);
-  await sleep(3000);
-  await pointerNarrate("Thanks for watching the GhostUI screen tour.");
-  await sleep(2000);
-  await pointerDismiss();
-  await sleep(500);
-}
+  get title(): string {
+    return describeWindow(this.match.payload);
+  }
 
-// ---------------------------------------------------------------------------
-// Main tour loop
-// ---------------------------------------------------------------------------
+  within(bounds: Bounds): boolean {
+    return this.bounds ? boundsContainedIn(this.bounds, bounds) : false;
+  }
 
-async function runTour(): Promise<void> {
-  const startTime = Date.now();
-  const maxDurationMs = DURATION_S * 1000;
+  meetsSize(minSize = 10): boolean {
+    return this.bounds ? this.bounds.width >= minSize && this.bounds.height >= minSize : false;
+  }
 
-  log(`Demo config: PAUSE_SCALE=${PAUSE_SCALE}, MAX_WINDOWS=${MAX_WINDOWS || "unlimited"}, MAX_CONTROLS=${MAX_CONTROLS}, DURATION_S=${DURATION_S}`);
-
-  await spawnActors();
-
-  try {
-    await introPhase();
-
-    // Discover windows
-    const allWindows = await discoverWindows();
-    if (allWindows.length === 0) {
-      log("No windows discovered. Ending tour early.");
-      await pointerNarrate("I couldn't find any windows to tour. Make sure some apps are open!");
-      await sleep(2000);
-      await pointerDismiss();
-      return;
+  key(): string {
+    const bounds = this.bounds;
+    const role = this.match.payload.target?.role || this.match.payload.node?._tag || "";
+    const label =
+      this.match.payload.target?.title ||
+      this.match.payload.target?.label ||
+      this.match.payload.node?._displayName ||
+      this.match.payload.node?._id ||
+      "";
+    if (!bounds) {
+      return `${this.pid ?? "?"}:${role}:${label}`;
     }
+    return [this.pid ?? "?", role, label, bounds.x, bounds.y, bounds.width, bounds.height].join(":");
+  }
 
-    log(`Discovered ${allWindows.length} window(s)`);
+  kind(fallbackKind = "control"): string {
+    return humanizeRole(this.match.payload.target?.role || this.match.payload.node?._tag) || fallbackKind;
+  }
 
-    // Apply max-windows limit
-    const windows = MAX_WINDOWS > 0 ? allWindows.slice(0, MAX_WINDOWS) : allWindows;
+  label(fallbackKind = "control"): string {
+    return (
+      this.match.payload.target?.title ||
+      this.match.payload.target?.label ||
+      this.match.payload.node?._displayName ||
+      this.match.payload.node?._id ||
+      this.kind(fallbackKind) ||
+      fallbackKind
+    );
+  }
 
-    // Tour each window, respecting duration limit
+  describe(fallbackKind = "control"): string {
+    const kind = this.kind(fallbackKind);
+    const label = this.label(fallbackKind);
+    if (label && label !== kind) {
+      return `${kind} "${label}"`;
+    }
+    return kind;
+  }
+}
+
+class AXSelection {
+  constructor(private readonly nodes: AXNode[]) {}
+
+  static fromMatches(matches: PayloadMatch[]): AXSelection {
+    return new AXSelection(matches.map((match) => new AXNode(match)));
+  }
+
+  get length(): number {
+    return this.nodes.length;
+  }
+
+  isEmpty(): boolean {
+    return this.nodes.length === 0;
+  }
+
+  first(): AXNode | null {
+    return this.nodes[0] ?? null;
+  }
+
+  toArray(): AXNode[] {
+    return [...this.nodes];
+  }
+
+  concat(other: AXSelection): AXSelection {
+    return new AXSelection([...this.nodes, ...other.nodes]);
+  }
+
+  withBounds(): AXSelection {
+    return new AXSelection(this.nodes.filter((node) => node.bounds));
+  }
+
+  within(bounds: Bounds): AXSelection {
+    return new AXSelection(this.nodes.filter((node) => node.within(bounds)));
+  }
+
+  visible(minSize = 10): AXSelection {
+    return new AXSelection(this.nodes.filter((node) => node.meetsSize(minSize)));
+  }
+
+  unique(): AXSelection {
+    const seen = new Set<string>();
+    const uniqueNodes: AXNode[] = [];
+    for (const node of this.nodes) {
+      const key = node.key();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      uniqueNodes.push(node);
+    }
+    return new AXSelection(uniqueNodes);
+  }
+
+  limit(count: number): AXSelection {
+    return new AXSelection(this.nodes.slice(0, count));
+  }
+
+  exclude(other: AXSelection): AXSelection {
+    const excluded = new Set(other.nodes.map((node) => node.key()));
+    return new AXSelection(this.nodes.filter((node) => !excluded.has(node.key())));
+  }
+
+  toPayloadText(): string {
+    return this.nodes.map((node) => node.rawText).join("\n");
+  }
+}
+
+class DemoScreenTour {
+  private activeGuiProc: Bun.Subprocess | null = null;
+  private interruptReject: ((error: Error) => void) | null = null;
+  private readonly interruptPromise: Promise<never>;
+
+  constructor(private readonly options: DemoScreenTourOptions) {
+    this.interruptPromise = new Promise<never>((_, reject) => {
+      this.interruptReject = reject;
+    });
+    this.interruptPromise.catch(() => {});
+  }
+
+  requestInterrupt(signal: "SIGINT" | "SIGTERM"): void {
+    log(`${signal} received; stopping the tour and cleaning up actors.`);
+    this.activeGuiProc?.kill();
+    this.activeGuiProc = null;
+    this.interruptReject?.(interruptError());
+    this.interruptReject = null;
+  }
+
+  async run(): Promise<void> {
+    const startTime = Date.now();
+    const maxDurationMs = this.options.durationSeconds * 1000;
     let toured = 0;
-    for (let i = 0; i < windows.length; i++) {
-      const elapsed = Date.now() - startTime;
-      if (elapsed > maxDurationMs) {
-        log(`Duration limit reached (${DURATION_S}s). Stopping after ${toured} windows.`);
-        break;
+
+    log(
+      `Demo config: PAUSE_SCALE=${this.options.pauseScale}, MAX_WINDOWS=${this.options.maxWindows || "unlimited"}, MAX_CONTROLS=${this.options.maxControls}, DURATION_S=${this.options.durationSeconds}`,
+    );
+
+    await this.spawnActors();
+
+    try {
+      log("Starting intro phase");
+      await this.pointerNarrate("Welcome to the GhostUI screen tour!");
+      await this.sleep(1500);
+      await this.pointerNarrate("I'll start with the foreground window, then fan out to the rest of the screen.");
+      await this.sleep(1500);
+
+      const focusedWindows = await this.axQuery({
+        query: "Window[frame]",
+        focused: true,
+        first: true,
+        json: true,
+      });
+      const backgroundWindows = await this.axQuery({
+        query: "Application { Window[frame] }",
+        all: true,
+        ndjson: true,
+      });
+      const allWindows = focusedWindows.concat(backgroundWindows).withBounds().unique();
+      await this.pointerDismiss();
+      await this.sleep(500);
+
+      if (allWindows.isEmpty()) {
+        log("No windows discovered. Ending tour early.");
+        await this.pointerNarrate("I couldn't find any windows to tour. Make sure some apps are open!");
+        await this.sleep(2000);
+        await this.pointerDismiss();
+        return;
       }
-      await tourWindow(windows[i], i, windows.length);
-      toured++;
+
+      log(`Discovered ${allWindows.length} window(s)`);
+
+      const windows = (this.options.maxWindows > 0 ? allWindows.limit(this.options.maxWindows) : allWindows).toArray();
+      for (let i = 0; i < windows.length; i++) {
+        const elapsed = Date.now() - startTime;
+        if (elapsed > maxDurationMs) {
+          log(`Duration limit reached (${this.options.durationSeconds}s). Stopping after ${toured} windows.`);
+          break;
+        }
+
+        const state = this.buildWindowState(windows[i], i, windows.length);
+        log(`Touring window ${state.index + 1}/${state.total}: ${state.title}`);
+
+        await this.pointerMove(state.titleBar.x + state.titleBar.width / 2, state.titleBar.y + state.titleBar.height / 2, "purposeful");
+        await this.sleep(400);
+        await this.canvasClear();
+        await this.rect(state.window, {
+          padding: 6,
+          size: 4,
+          color: "rgba(59,130,246,0.85)",
+        });
+        await this.pointerNarrate(
+          state.index === 0
+            ? `Starting with the foreground window. This is "${state.title}".`
+            : `Next up is window ${state.index + 1} of ${state.total}. This is "${state.title}".`,
+        );
+        await this.sleep(3000);
+        await this.pointerDismiss();
+        await this.sleep(300);
+
+        if (!state.pid) {
+          await this.pointerNarrate("I can't resolve a live process for this window, so I'll move on.");
+          await this.sleep(1800);
+          await this.pointerDismiss();
+          await this.canvasClear();
+          await this.sleep(500);
+          toured++;
+          continue;
+        }
+
+        const buttons = (await this.axQuery({
+          query: "Button[frame]",
+          ndjson: true,
+          pid: state.pid,
+        }))
+          .visible()
+          .within(state.bounds)
+          .unique()
+          .limit(this.options.maxControls);
+
+        if (!buttons.isEmpty()) {
+          const button = buttons.first();
+          if (button?.center) {
+            await this.canvasClear();
+            await this.circle(button, {
+              padding: 8,
+              size: 4,
+              color: "rgba(255,59,48,0.72)",
+            });
+            await this.pointerMove(button.center.x, button.center.y, "purposeful");
+            await this.sleep(300);
+            await this.pointerNarrate(`I can click this ${button.describe("button")}. This is visual-only, no real input is sent.`);
+            await this.sleep(1800);
+            await this.pointerClick(button.center.x, button.center.y);
+            await this.sleep(900);
+            await this.pointerDismiss();
+          }
+
+          await this.sleep(250);
+          await this.canvasClear();
+          await this.outline(buttons);
+          const anchor = buttons.first();
+          if (anchor?.center) {
+            await this.pointerMove(anchor.center.x, anchor.center.y, "purposeful");
+            await this.sleep(250);
+          }
+          await this.pointerNarrate("I can click ANY of these buttons. The outlines show every button I found in this window.");
+          await this.sleep(2200);
+          await this.pointerDismiss();
+        } else {
+          await this.canvasClear();
+          await this.pointerNarrate("I don't see any buttons here, so I'll skip the click demo and keep scanning.");
+          await this.sleep(1800);
+          await this.pointerDismiss();
+        }
+
+        await this.sleep(250);
+        await this.canvasClear();
+        await this.pointerNarrate("Hmm... let me scan deeper");
+        await this.scan(state.window, 900);
+        await this.xray(state.window, 1100);
+        await this.sleep(250);
+        await this.pointerDismiss();
+
+        await this.sleep(250);
+        await this.canvasClear();
+        const additionalActionControls = (await this.axQuery({
+          query: "*[actions,frame,title,label]",
+          ndjson: true,
+          pid: state.pid,
+        }))
+          .visible()
+          .within(state.bounds)
+          .unique()
+          .exclude(buttons)
+          .limit(this.options.maxControls);
+
+        if (additionalActionControls.isEmpty()) {
+          await this.pointerNarrate("Searching by actions did not reveal any additional controls in this window.");
+          await this.sleep(1800);
+          await this.pointerDismiss();
+        } else {
+          await this.outline(additionalActionControls);
+          const anchor = additionalActionControls.first();
+          if (anchor?.center) {
+            await this.pointerMove(anchor.center.x, anchor.center.y, "purposeful");
+            await this.sleep(250);
+          }
+          await this.pointerNarrate(
+            `There are also controls here. I searched by actions and outlined all ${additionalActionControls.length} of them without sending real input.`,
+          );
+          await this.sleep(2200);
+          await this.pointerDismiss();
+        }
+
+        await this.canvasClear();
+        await this.sleep(500);
+        toured++;
+      }
+
+      log("Starting outro phase");
+      await this.pointerNarrate(`Tour complete! I visited ${toured} window${toured !== 1 ? "s" : ""} on this screen.`);
+      await this.sleep(3000);
+      await this.pointerNarrate("Thanks for watching the GhostUI screen tour.");
+      await this.sleep(2000);
+      await this.pointerDismiss();
+      await this.sleep(500);
+    } finally {
+      await this.killActors();
     }
 
-    await outroPhase(toured);
-  } finally {
-    await killActors();
+    const totalSeconds = ((Date.now() - startTime) / 1000).toFixed(1);
+    log(`Demo finished in ${totalSeconds}s`);
   }
 
-  const totalSeconds = ((Date.now() - startTime) / 1000).toFixed(1);
-  log(`Demo finished in ${totalSeconds}s`);
-}
+  private buildWindowState(window: AXNode, index: number, total: number): WindowTourState {
+    const bounds = window.bounds;
+    if (!bounds) {
+      throw new Error("Window payload is missing bounds");
+    }
+    return {
+      window,
+      index,
+      total,
+      title: window.title,
+      pid: window.pid,
+      bounds,
+      titleBar: titleBarBox(bounds),
+    };
+  }
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
+  private async sleep(ms: number): Promise<void> {
+    await Promise.race([
+      new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms * this.options.pauseScale))),
+      this.interruptPromise,
+    ]);
+  }
+
+  private async guiWithInput(stdinText: string, ...args: string[]): Promise<GuiResult> {
+    const proc = Bun.spawn({
+      cmd: [this.options.guiPath, ...args],
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: this.options.env,
+    });
+    this.activeGuiProc = proc;
+    try {
+      if (stdinText.length > 0) {
+        proc.stdin.write(stdinText);
+      }
+      proc.stdin.end();
+      const [stdout, stderr, exitCode] = await Promise.race([
+        Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+          proc.exited,
+        ]),
+        this.interruptPromise,
+      ]);
+      return { exitCode, stdout: stdout.trim(), stderr: stderr.trim() };
+    } finally {
+      if (this.activeGuiProc === proc) {
+        this.activeGuiProc = null;
+      }
+    }
+  }
+
+  private async gui(...args: string[]): Promise<GuiResult> {
+    return this.guiWithInput("", ...args);
+  }
+
+  private async spawnActors(): Promise<void> {
+    const pointerResult = await this.gui("actor", "spawn", "pointer", this.options.pointerName);
+    if (pointerResult.exitCode !== 0) {
+      throw new Error(`Failed to spawn pointer: ${pointerResult.stderr}`);
+    }
+    log(`Spawned pointer actor: ${this.options.pointerName}`);
+
+    const canvasResult = await this.gui("actor", "spawn", "canvas", this.options.canvasName);
+    if (canvasResult.exitCode !== 0) {
+      throw new Error(`Failed to spawn canvas: ${canvasResult.stderr}`);
+    }
+    log(`Spawned canvas actor: ${this.options.canvasName}`);
+  }
+
+  private async killActors(): Promise<void> {
+    log("Cleaning up actors...");
+    await this.gui("actor", "kill", this.options.pointerName).catch(() => {});
+    await this.gui("actor", "kill", this.options.canvasName).catch(() => {});
+    log("Actors cleaned up.");
+  }
+
+  private async pointerMove(x: number, y: number, style = "purposeful"): Promise<void> {
+    await this.gui(
+      "actor",
+      "run",
+      `${this.options.pointerName}.move`,
+      "--to",
+      String(Math.round(x)),
+      String(Math.round(y)),
+      "--style",
+      style,
+    );
+  }
+
+  private async pointerClick(x: number, y: number): Promise<void> {
+    await this.gui(
+      "actor",
+      "run",
+      `${this.options.pointerName}.click`,
+      "--at",
+      String(Math.round(x)),
+      String(Math.round(y)),
+    );
+  }
+
+  private async pointerNarrate(text: string): Promise<void> {
+    await this.gui("actor", "run", `${this.options.pointerName}.narrate`, "--text", text);
+  }
+
+  private async pointerDismiss(): Promise<void> {
+    await this.gui("actor", "run", `${this.options.pointerName}.dismiss`);
+  }
+
+  private async canvasClear(): Promise<void> {
+    await this.gui("actor", "run", `${this.options.canvasName}.clear`);
+  }
+
+  private async draw(shape: string, target: AXNode, style: DrawStyle = {}): Promise<void> {
+    const args = ["actor", "run", `${this.options.canvasName}.draw`, shape, "-"];
+    if (style.padding != null) args.push("--padding", String(style.padding));
+    if (style.size != null) args.push("--size", String(style.size));
+    if (style.color) args.push("--color", style.color);
+    await this.guiWithInput(target.rawText, ...args);
+  }
+
+  private async rect(target: AXNode, style: DrawStyle = {}): Promise<void> {
+    await this.draw("rect", target, style);
+  }
+
+  private async circle(target: AXNode, style: DrawStyle = {}): Promise<void> {
+    await this.draw("circ", target, style);
+  }
+
+  private scaledEffectDuration(ms: number): string {
+    return String(Math.max(1, Math.round(ms * this.options.pauseScale)));
+  }
+
+  private async outline(target: AXSelection): Promise<void> {
+    if (target.isEmpty()) return;
+    await this.guiWithInput(target.toPayloadText(), "gfx", "outline", "-");
+  }
+
+  private async scan(target: AXNode | AXSelection, durationMs = 900): Promise<void> {
+    const payloadText = target instanceof AXSelection ? target.toPayloadText() : target.rawText;
+    if (!payloadText) return;
+    await this.guiWithInput(payloadText, "gfx", "scan", "--duration", this.scaledEffectDuration(durationMs), "-");
+  }
+
+  private async xray(target: AXNode | AXSelection, durationMs = 1100): Promise<void> {
+    const payloadText = target instanceof AXSelection ? target.toPayloadText() : target.rawText;
+    if (!payloadText) return;
+    await this.guiWithInput(payloadText, "gfx", "xray", "--duration", this.scaledEffectDuration(durationMs), "-");
+  }
+
+  private async axQuery(options: AXQueryOptions): Promise<AXSelection> {
+    const args = ["ax", "query"];
+    if (options.focused) args.push("--focused");
+    if (options.all) args.push("--all");
+    if (options.pid != null) args.push("--pid", String(options.pid));
+    const wantsNdjson = options.ndjson ?? (options.all || options.pid != null);
+    const wantsJson = options.json ?? !wantsNdjson;
+    if (wantsNdjson) args.push("--ndjson");
+    if (wantsJson) args.push("--json");
+    if (options.first) args.push("--first");
+    args.push(options.query);
+
+    const result = await this.gui(...args);
+    if (result.exitCode !== 0) {
+      log(`AX query failed for "${options.query}": ${result.stderr || "empty response"}`);
+      return new AXSelection([]);
+    }
+    if (!result.stdout) {
+      return new AXSelection([]);
+    }
+
+    if (wantsNdjson) {
+      const matches: PayloadMatch[] = [];
+      for (const line of result.stdout.split("\n").filter((candidate) => candidate.trim().length > 0)) {
+        try {
+          matches.push({ payload: parseJSON<AXPayload>(line), rawText: line });
+        } catch {
+          // skip malformed lines
+        }
+      }
+      return AXSelection.fromMatches(matches);
+    }
+
+    try {
+      return AXSelection.fromMatches([{ payload: parseJSON<AXPayload>(result.stdout), rawText: result.stdout }]);
+    } catch {
+      log(`AX query parse failed for "${options.query}"`);
+      return new AXSelection([]);
+    }
+  }
+}
 
 async function main(): Promise<void> {
+  const tour = new DemoScreenTour({
+    guiPath: GUI_PATH,
+    pauseScale: PAUSE_SCALE,
+    maxWindows: MAX_WINDOWS,
+    maxControls: MAX_CONTROLS,
+    durationSeconds: DURATION_S,
+    pointerName: `demo.pointer.${Date.now()}`,
+    canvasName: `demo.canvas.${Date.now()}`,
+    env: process.env,
+  });
+
+  process.once("SIGINT", tour.requestInterrupt.bind(tour, "SIGINT"));
+  process.once("SIGTERM", tour.requestInterrupt.bind(tour, "SIGTERM"));
+
   try {
-    await runTour();
+    await tour.run();
   } catch (error) {
     if (isInterruptError(error)) {
       process.exitCode = 130;
