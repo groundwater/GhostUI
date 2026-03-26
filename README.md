@@ -1,8 +1,6 @@
 # GhostUI
 
-<p align="center">
-  <img src="macOS/GhostUI/Resources/Icon/GhostUIIcon-final.png" width="256" alt="GhostUI Icon">
-</p>
+![GhostUI Icon](./macOS/GhostUI/Resources/Icon/GhostUIIcon-final.png)
 
 GhostUI is a macOS GUI automation system with two runtime pieces:
 
