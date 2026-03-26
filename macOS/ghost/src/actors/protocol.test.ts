@@ -190,6 +190,44 @@ describe("actor protocol", () => {
       timeoutMs: undefined,
     });
 
+    expect(parseActorRunCLIArgs("drag", ["--to", "1680", "320"])).toEqual({
+      action: {
+        kind: "drag",
+        to: { x: 1680, y: 320 },
+      },
+      timeoutMs: undefined,
+    });
+
+    expect(parseActorRunCLIArgs("scroll", ["--dx", "0", "--dy", "120"])).toEqual({
+      action: {
+        kind: "scroll",
+        dx: 0,
+        dy: 120,
+      },
+      timeoutMs: undefined,
+    });
+
+    expect(parseActorRunCLIArgs("think", ["--for", "25"])).toEqual({
+      action: {
+        kind: "think",
+        forMs: 25,
+      },
+      timeoutMs: undefined,
+    });
+
+    expect(parseActorRunCLIArgs("narrate", ["--text", "Heads up"])).toEqual({
+      action: {
+        kind: "narrate",
+        text: "Heads up",
+      },
+      timeoutMs: undefined,
+    });
+
+    expect(parseActorRunCLIArgs("dismiss", [])).toEqual({
+      action: { kind: "dismiss" },
+      timeoutMs: undefined,
+    });
+
     expect(parseActorRunCLIArgs("draw", ["check", "--padding", "8", "--size", "4", "--color", "rgba(255,59,48,0.9)"])).toEqual({
       timeoutMs: undefined,
       action: {
@@ -329,6 +367,64 @@ describe("actor protocol", () => {
     );
   });
 
+  test("parses pointer defaults and canvas shape/style permutations", () => {
+    expect(parseActorRunCLIArgs("move", ["--to", "12", "34"])).toEqual({
+      timeoutMs: undefined,
+      action: {
+        kind: "move",
+        to: { x: 12, y: 34 },
+        style: "purposeful",
+      },
+    });
+
+    expect(parseActorRunCLIArgs("click", [])).toEqual({
+      timeoutMs: undefined,
+      action: {
+        kind: "click",
+        button: "left",
+        at: undefined,
+      },
+    });
+
+    expect(parseActorRunCLIArgs("click", ["--button", "middle"])).toEqual({
+      timeoutMs: undefined,
+      action: {
+        kind: "click",
+        button: "middle",
+        at: undefined,
+      },
+    });
+
+    for (const shape of ["rect", "circ", "check", "cross", "underline"] as const) {
+      expect(parseActorRunCLIArgs("draw", [shape, "--padding", "6", "--size", "5", "--color", "#00ff00"])).toEqual({
+        timeoutMs: undefined,
+        action: {
+          kind: "draw",
+          shape,
+          style: {
+            padding: 6,
+            size: 5,
+            color: "#00ff00",
+          },
+        },
+      });
+    }
+
+    expect(parseActorRunCLIArgs("text", ["Hello", "--highlight", "#00ff00", "--color", "#ff0000"])).toEqual({
+      timeoutMs: undefined,
+      action: {
+        kind: "text",
+        text: "Hello",
+        style: {
+          font: "SF Pro Text",
+          size: 36,
+          color: "#ff0000",
+          highlight: "#00ff00",
+        },
+      },
+    });
+  });
+
   test("normalizes JSON requests", () => {
     expect(normalizeActorSpawnRequest({ type: "pointer", name: "pointer" })).toEqual({
       type: "pointer",
@@ -344,6 +440,24 @@ describe("actor protocol", () => {
     expect(normalizeActorRunRequest({ kind: "narrate", text: "hello", timeoutMs: 1500 })).toEqual({
       action: { kind: "narrate", text: "hello" },
       timeoutMs: 1500,
+    });
+
+    expect(normalizeActorRunRequest({ kind: "move", to: { x: 420, y: 240 } })).toEqual({
+      action: {
+        kind: "move",
+        to: { x: 420, y: 240 },
+        style: "purposeful",
+      },
+      timeoutMs: undefined,
+    });
+
+    expect(normalizeActorRunRequest({ kind: "click" })).toEqual({
+      action: {
+        kind: "click",
+        button: "left",
+        at: undefined,
+      },
+      timeoutMs: undefined,
     });
 
     expect(normalizeActorRunRequest({
@@ -363,11 +477,177 @@ describe("actor protocol", () => {
       },
       timeoutMs: undefined,
     });
+
+    expect(normalizeActorRunRequest({
+      kind: "text",
+      text: "Ready",
+      style: { highlight: "#00ff00", color: "#ff0000" },
+    })).toEqual({
+      action: {
+        kind: "text",
+        text: "Ready",
+        style: {
+          font: "SF Pro Text",
+          size: 36,
+          color: "#ff0000",
+          highlight: "#00ff00",
+        },
+      },
+      timeoutMs: undefined,
+    });
+
+    expect(normalizeActorRunRequest({
+      kind: "draw",
+      shape: "check",
+      boxes: [
+        { x: 100, y: 120, width: 240, height: 180 },
+        { x: 400, y: 420, width: 320, height: 200 },
+      ],
+    })).toEqual({
+      action: {
+        kind: "draw",
+        shape: "check",
+        style: {
+          color: "#FF3B30",
+          size: 4,
+          padding: 0,
+        },
+        box: undefined,
+        boxes: [
+          { x: 100, y: 120, width: 240, height: 180 },
+          { x: 400, y: 420, width: 320, height: 200 },
+        ],
+      },
+      timeoutMs: undefined,
+    });
   });
 
   test("rejects bad inputs with typed actor errors", () => {
     expect(() => parseActorRunCLIArgs("scroll", ["--dx", "0"])).toThrow(ActorApiError);
+    expect(() => parseActorRunCLIArgs("move", ["--to", "10", "20", "--style", "teleport"])).toThrow(
+      "--style must be one of purposeful, fast, slow, wandering",
+    );
+    expect(() => parseActorRunCLIArgs("click", ["--button", "double"])).toThrow(
+      "--button must be one of left, right, middle",
+    );
+    expect(() => parseActorRunCLIArgs("think", ["--for", "-1"])).toThrow(
+      "--for must be greater than or equal to 0",
+    );
+    expect(() => parseActorRunCLIArgs("scroll", ["--dx", "NaN", "--dy", "12"])).toThrow(
+      "--dx must be a finite number",
+    );
+    expect(() => parseActorRunCLIArgs("draw", ["check", "--box", "100", "120", "0", "180"])).toThrow(
+      "--box requires finite x y width height with positive width and height",
+    );
+    expect(() => parseActorRunCLIArgs(
+      "draw",
+      ["check", "-", "--box", "100", "120", "240", "180"],
+      JSON.stringify({
+        type: "gui.payload",
+        version: 1,
+        source: "vat.query",
+        query: "Window[frame]",
+        tree: null,
+        nodes: null,
+        matchCount: null,
+        node: null,
+        target: null,
+        cursor: null,
+        axQueryMatch: null,
+        vatQueryPlan: null,
+        bounds: { x: 100, y: 120, width: 240, height: 180 },
+        point: { x: 220, y: 210 },
+        issues: [],
+      }),
+    )).toThrow("actor run draw stdin mode cannot be combined with --box");
+    expect(() => parseActorRunCLIArgs(
+      "draw",
+      ["check", "-"],
+      `${JSON.stringify({
+        type: "gui.payload",
+        version: 1,
+        source: "vat.query",
+        query: "Window[frame]",
+        tree: null,
+        nodes: null,
+        matchCount: null,
+        node: null,
+        target: null,
+        cursor: null,
+        axQueryMatch: null,
+        vatQueryPlan: null,
+        bounds: { x: 100, y: 120, width: 240, height: 180 },
+        point: { x: 220, y: 210 },
+        issues: [],
+      })}\n${JSON.stringify({
+        type: "gui.payload",
+        version: 1,
+        source: "vat.query",
+        query: "Window[frame]",
+        tree: null,
+        nodes: null,
+        matchCount: null,
+        node: null,
+        target: null,
+        cursor: null,
+        axQueryMatch: null,
+        vatQueryPlan: null,
+        bounds: { x: 400, y: 420, width: 320, height: 200 },
+        point: { x: 560, y: 520 },
+        issues: [],
+      })}\n`,
+    )).toThrow("actor run draw stdin mode requires exactly one AX/VAT target-bearing payload");
+    expect(() => parseActorRunCLIArgs("text", ["Working", "set", "-"], JSON.stringify({
+      type: "gui.payload",
+      version: 1,
+      source: "vat.query",
+      query: "Window[frame]",
+      tree: null,
+      nodes: [{ _tag: "Window", _children: [] }],
+      matchCount: 1,
+      node: null,
+      target: null,
+      cursor: null,
+      axQueryMatch: null,
+      vatQueryPlan: null,
+      bounds: null,
+      point: null,
+      issues: [],
+    }))).toThrow("actor run text Window is missing bounds/frame coordinates");
+    expect(() => parseActorRunCLIArgs(
+      "text",
+      ["Working", "set", "-", "--box", "100", "120", "240", "180"],
+      JSON.stringify({
+        type: "gui.payload",
+        version: 1,
+        source: "vat.query",
+        query: "Window[frame]",
+        tree: null,
+        nodes: null,
+        matchCount: null,
+        node: null,
+        target: null,
+        cursor: null,
+        axQueryMatch: null,
+        vatQueryPlan: null,
+        bounds: { x: 100, y: 120, width: 240, height: 180 },
+        point: { x: 220, y: 210 },
+        issues: [],
+      }),
+    )).toThrow("actor run text stdin mode cannot be combined with --box");
     expect(() => normalizeActorSpawnRequest({ type: "bogus", name: "pointer" })).toThrow(ActorApiError);
+    expect(() => normalizeActorRunRequest({ kind: "narrate", text: "   " })).toThrow(ActorApiError);
+    expect(() => normalizeActorRunRequest({
+      kind: "draw",
+      shape: "check",
+      box: { x: 100, y: 120, width: 0, height: 180 },
+    })).toThrow(ActorApiError);
+    expect(() => normalizeActorRunRequest({
+      kind: "draw",
+      shape: "rect",
+      box: { x: 100, y: 120, width: 240, height: 180 },
+      boxes: [{ x: 400, y: 420, width: 320, height: 200 }],
+    })).toThrow("box and boxes cannot both be provided");
     expect(() => normalizeActorRunRequest({ kind: "teleport" })).toThrow(ActorApiError);
   });
 });

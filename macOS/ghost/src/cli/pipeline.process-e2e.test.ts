@@ -438,3 +438,128 @@ describe("CLI pipeline process e2e parser and stdin contracts", () => {
     });
   }
 });
+
+describe("CLI pipeline process e2e actor command dispatch", () => {
+  test("actor run pointer.click rejects stdin passthrough mixed with --at", async () => {
+    const payload = makeAXTargetPayload();
+    const result = await runMainCLI(
+      JSON.stringify(payload),
+      ["actor", "run", "pointer.main.click", "-", "--at", "30", "40"],
+      cliTestEnv,
+    );
+
+    expect(result.producerExitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
+    expect(normalizeOutput(result.producerStderr)).toBe("");
+    expect(normalizeOutput(result.stdout)).toBe("");
+    expect(normalizeOutput(result.stderr)).toBe("actor run click stdin mode cannot be combined with --at");
+  });
+
+  test("actor run pointer.scroll renders scroll usage for invalid numeric args", async () => {
+    const result = await runMainCLI(
+      "",
+      ["actor", "run", "pointer.main.scroll", "--dx", "nope", "--dy", "12"],
+      cliTestEnv,
+    );
+
+    expect(result.producerExitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
+    expect(normalizeOutput(result.producerStderr)).toBe("");
+    expect(normalizeOutput(result.stdout)).toBe("");
+    expect(normalizeOutput(result.stderr)).toContain("gui actor run <name>.scroll --dx <n> --dy <n>");
+    expect(normalizeOutput(result.stderr)).toContain("gui help actor run scroll");
+  });
+
+  test("actor run pointer.narrate renders narrate usage for empty text", async () => {
+    const result = await runMainCLI(
+      "",
+      ["actor", "run", "pointer.main.narrate", "--text", ""],
+      cliTestEnv,
+    );
+
+    expect(result.producerExitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
+    expect(normalizeOutput(result.producerStderr)).toBe("");
+    expect(normalizeOutput(result.stdout)).toBe("");
+    expect(normalizeOutput(result.stderr)).toContain("gui actor run <name>.narrate --text");
+    expect(normalizeOutput(result.stderr)).toContain("gui help actor run narrate");
+  });
+
+  test("actor run canvas.draw renders draw usage for invalid literal boxes", async () => {
+    const result = await runMainCLI(
+      "",
+      ["actor", "run", "canvas.notes.draw", "check", "--box", "100", "120", "0", "180"],
+      cliTestEnv,
+    );
+
+    expect(result.producerExitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
+    expect(normalizeOutput(result.producerStderr)).toBe("");
+    expect(normalizeOutput(result.stdout)).toBe("");
+    expect(normalizeOutput(result.stderr)).toContain("gui actor run <name>.draw");
+    expect(normalizeOutput(result.stderr)).toContain("gui help actor run draw");
+  });
+
+  test("actor run canvas.draw renders draw usage for stdin combined with --box", async () => {
+    const payload = makeAXTargetPayload();
+    const result = await runMainCLI(
+      JSON.stringify(payload),
+      ["actor", "run", "canvas.notes.draw", "check", "-", "--box", "100", "120", "240", "180"],
+      cliTestEnv,
+    );
+
+    expect(result.producerExitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
+    expect(normalizeOutput(result.producerStderr)).toBe("");
+    expect(normalizeOutput(result.stdout)).toBe("");
+    expect(normalizeOutput(result.stderr)).toContain("gui actor run <name>.draw");
+    expect(normalizeOutput(result.stderr)).toContain("gui help actor run draw");
+  });
+
+  test("actor run canvas.text renders text usage for multi-bounds stdin payloads", async () => {
+    const { payload } = makeVatPayload("multi");
+    const result = await runMainCLI(
+      JSON.stringify(payload),
+      ["actor", "run", "canvas.notes.text", "Working", "set", "-"],
+      cliTestEnv,
+    );
+
+    expect(result.producerExitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
+    expect(normalizeOutput(result.producerStderr)).toBe("");
+    expect(normalizeOutput(result.stdout)).toBe("");
+    expect(normalizeOutput(result.stderr)).toContain("gui actor run <name>.text");
+    expect(normalizeOutput(result.stderr)).toContain("gui help actor run text");
+  });
+
+  test("actor run canvas.text renders text usage for stdin combined with --box", async () => {
+    const payload = makeAXTargetPayload();
+    const result = await runMainCLI(
+      JSON.stringify(payload),
+      ["actor", "run", "canvas.notes.text", "Working", "set", "-", "--box", "100", "120", "240", "180"],
+      cliTestEnv,
+    );
+
+    expect(result.producerExitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
+    expect(normalizeOutput(result.producerStderr)).toBe("");
+    expect(normalizeOutput(result.stdout)).toBe("");
+    expect(normalizeOutput(result.stderr)).toContain("gui actor run <name>.text");
+    expect(normalizeOutput(result.stderr)).toContain("gui help actor run text");
+  });
+
+  test("actor run unknown action falls back to generic actor usage", async () => {
+    const result = await runMainCLI(
+      "",
+      ["actor", "run", "pointer.main.teleport"],
+      cliTestEnv,
+    );
+
+    expect(result.producerExitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
+    expect(normalizeOutput(result.producerStderr)).toBe("");
+    expect(normalizeOutput(result.stdout)).toBe("");
+    expect(normalizeOutput(result.stderr)).toContain("gui actor run pointer.main.teleport.move");
+    expect(normalizeOutput(result.stderr)).toContain("gui help actor run");
+  });
+});
