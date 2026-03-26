@@ -253,27 +253,6 @@ export async function fetchLiveQuery(query: string, first = 100): Promise<LiveQu
   return res.json() as Promise<LiveQueryResult>;
 }
 
-export async function fetchElementScreenshot(label: string, role?: string): Promise<Buffer> {
-  const params = new URLSearchParams({ label });
-  if (role) params.set("role", role);
-  const res = await daemonFetch(`${BASE}/api/element-screenshot?${params}`);
-  if (!res.ok) {
-    throw new Error(`element-screenshot failed (${res.status}): ${await res.text()}`);
-  }
-  return Buffer.from(await res.arrayBuffer());
-}
-
-export async function fetchFrameScreenshot(x: number, y: number, w: number, h: number): Promise<Buffer> {
-  const params = new URLSearchParams({
-    fx: String(x), fy: String(y), fw: String(w), fh: String(h),
-  });
-  const res = await daemonFetch(`${BASE}/api/element-screenshot?${params}`);
-  if (!res.ok) {
-    throw new Error(`frame-screenshot failed (${res.status}): ${await res.text()}`);
-  }
-  return Buffer.from(await res.arrayBuffer());
-}
-
 export async function postRecImage(request: RecImageRequest): Promise<Buffer> {
   const res = await daemonFetch(`${BASE}/api/rec/image`, {
     method: "POST",

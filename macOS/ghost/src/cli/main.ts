@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
-import { fetchTree, fetchCRDTTree, fetchLiveQuery, fetchElementScreenshot, fetchFrameScreenshot, postScanOverlay, postDrawOverlay, postKeyboardInput, switchApp, focusWindow, dragWindow, fetchFilteredCGWindows, findCGWindowAt, fetchRawWorkspaceApps, fetchRawWorkspaceFrontmost, fetchLogs, openLogStream, fetchScreen, fetchLeases, openEventStream, fetchPbRead, postPbWrite, fetchPbTypes, postPbClear, fetchDisplayList, fetchDisplayMain, fetchDisplayById, fetchDefaultsRead, postDefaultsWrite, fetchDefaultsDomains, killActor, listActors, postRecFilmstrip, postRecImage, runActor, spawnActor, postCgMove, postCgClick, postCgDoubleClick, postCgDrag, postCgScroll, postCgKeyDown, postCgKeyUp, postCgModDown, postCgModUp, fetchCgMousePos, fetchCgMouseState, fetchVatMounts, fetchVatQuery, fetchVatTree, openVatWatchStream, postVatMount, deleteVatMount, postVatPolicy, VatMountRequestError } from "./client.js";
+import { fetchTree, fetchCRDTTree, fetchLiveQuery, postScanOverlay, postDrawOverlay, postKeyboardInput, switchApp, focusWindow, dragWindow, fetchFilteredCGWindows, findCGWindowAt, fetchRawWorkspaceApps, fetchRawWorkspaceFrontmost, fetchLogs, openLogStream, fetchScreen, fetchLeases, openEventStream, fetchPbRead, postPbWrite, fetchPbTypes, postPbClear, fetchDisplayList, fetchDisplayMain, fetchDisplayById, fetchDefaultsRead, postDefaultsWrite, fetchDefaultsDomains, killActor, listActors, postRecFilmstrip, postRecImage, runActor, spawnActor, postCgMove, postCgClick, postCgDoubleClick, postCgDrag, postCgScroll, postCgKeyDown, postCgKeyUp, postCgModDown, postCgModUp, fetchCgMousePos, fetchCgMouseState, fetchVatMounts, fetchVatQuery, fetchVatTree, openVatWatchStream, postVatMount, deleteVatMount, postVatPolicy, VatMountRequestError } from "./client.js";
 import { parseQuery } from "./query.js";
 import { filterTree, bfsFirst, collectObscuredApps, findMatchedNode, OBSCURED_THRESHOLD, matchTree } from "./filter.js";
-import { parseSelector, matchChain } from "./print.js";
 import { toGUIML } from "./guiml.js";
 import { collectRects } from "./frames.js";
 import { renderQueryResult } from "./introspection.js";
@@ -2218,34 +2217,6 @@ async function main() {
         break;
       }
 
-      case "print":
-      case "p": {
-        const pArgs = args.slice(1);
-        if (pArgs.length < 2) {
-          failUsage("print");
-        }
-        // Last arg starting with "." is the property
-        const lastArg = pArgs[pArgs.length - 1];
-        if (!lastArg.startsWith(".")) {
-          failUsage("print", "Last argument must be a .property (e.g. .value)");
-        }
-        const property = lastArg.slice(1);
-        const selectorTokens = pArgs.slice(0, -1);
-        const selectors = selectorTokens.map(parseSelector);
-
-        const tree = await fetchTree();
-        const matches = matchChain(tree, selectors, property);
-
-        if (matches.length === 0) {
-          process.exit(1);
-        }
-        for (const m of matches) {
-          console.error(m.path);
-          console.log(m.value);
-        }
-        break;
-      }
-
       case "window": {
         const windowArgs = args.slice(1);
         const subcommand = windowArgs[0];
@@ -2434,66 +2405,6 @@ async function main() {
             throw new Error(`Unsupported rec mode: ${String(_exhaustive)}`);
           }
         }
-        break;
-      }
-
-      case "img": {
-        const imgArgs = args.slice(1);
-        // Parse --out flag
-        let outPath: string | undefined;
-        const outIdx = imgArgs.indexOf("--out");
-        if (outIdx >= 0) {
-          outPath = imgArgs[outIdx + 1];
-          if (!outPath) { failUsage("img", "--out requires a file path"); }
-          imgArgs.splice(outIdx, 2);
-        }
-        const imgQueryStr = imgArgs.join(" ");
-        if (!imgQueryStr) { failUsage("img"); }
-
-        // Use findMatchedNode to get the deepest matched node with all original
-        // attributes preserved (filterTree strips frame coords for display output)
-        const tree = await fetchTree();
-        const queries = parseQuery(imgQueryStr);
-        const target = findMatchedNode(tree, queries);
-        if (!target) throw new Error(`Node not found: ${imgQueryStr}`);
-
-        // If the node has frame coordinates (x, y, w, h), use direct frame-based cropping.
-        // This works for Window nodes and any other node with geometry in the CRDT tree.
-        const hasFrame = target.x != null && target.y != null && target.w != null && target.h != null;
-        let png: Buffer;
-
-        if (hasFrame) {
-          png = await fetchFrameScreenshot(
-            target.x as number, target.y as number,
-            target.w as number, target.h as number,
-          );
-        } else {
-          // Fall back to label-based AX lookup
-          const rawId = (target._id || target.id) as string;
-          if (!rawId) throw new Error(`Cannot screenshot '${imgQueryStr}': matched node has no frame coordinates (x,y,w,h) and no id`);
-
-          // Extract label from ID (Tag:Label:Index → Label)
-          const parts = rawId.split(":");
-          let label = parts.length < 3 ? parts[1] || "" : parts.slice(1, -1).join(":");
-          if (!label) {
-            label = (target.label || target.title || target._displayName || target.value || "") as string;
-          }
-          if (!label) throw new Error(`Cannot screenshot '${imgQueryStr}': matched node has no frame coordinates and no label`);
-
-          // Map CRDT type → AX role for more precise matching
-          const typeToRole: Record<string, string> = {
-            Button: "AXButton", TextField: "AXTextField", SearchField: "AXSearchField", Toggle: "AXCheckBox",
-            ListItem: "AXRow", Tab: "AXTab", TreeItem: "AXRow",
-            Row: "AXRow", Cell: "AXCell",
-            MenuItem: "AXMenuItem", MenuBarItem: "AXMenuBarItem",
-            Window: "AXWindow",
-          };
-          const role = typeToRole[target._tag] || undefined;
-
-          png = await fetchElementScreenshot(label, role);
-        }
-
-        await writeArtifactOutput(png, outPath);
         break;
       }
 
