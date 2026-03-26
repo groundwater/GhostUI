@@ -16,6 +16,10 @@ export interface DrawRectStyle {
 export interface DrawRectFrom {
   rect: DrawRect;
   cornerRadius?: number;
+  stroke?: string;
+  fill?: string;
+  lineWidth?: number;
+  opacity?: number;
 }
 
 export type DrawAnimationEase = "linear" | "easeIn" | "easeOut" | "easeInOut";
@@ -129,6 +133,10 @@ type DrawMarkerStyleInput = Partial<DrawMarkerStyle>;
 interface DrawRectFromInput {
   rect?: unknown;
   cornerRadius?: unknown;
+  stroke?: unknown;
+  fill?: unknown;
+  lineWidth?: unknown;
+  opacity?: unknown;
 }
 
 interface DrawLineFromInput {
@@ -374,6 +382,10 @@ function normalizeRectFrom(value: unknown, path: string): DrawRectFrom {
   return {
     rect: normalizeRect(from.rect, `${path}.rect`),
     cornerRadius: from.cornerRadius === undefined ? undefined : expectNonNegativeNumber(from.cornerRadius, `${path}.cornerRadius`),
+    stroke: from.stroke === undefined ? undefined : expectCssColor(from.stroke, `${path}.stroke`),
+    fill: from.fill === undefined ? undefined : expectCssColor(from.fill, `${path}.fill`),
+    lineWidth: from.lineWidth === undefined ? undefined : expectPositiveNumber(from.lineWidth, `${path}.lineWidth`),
+    opacity: from.opacity === undefined ? undefined : expectOpacity(from.opacity, `${path}.opacity`),
   };
 }
 

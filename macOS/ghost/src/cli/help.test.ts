@@ -148,14 +148,16 @@ describe("cli help rendering", () => {
   test("gfx help documents the public visual annotation command family", () => {
     const help = renderHelpTopic("gfx");
 
-    expect(help).toContain("gui gfx outline -");
+    expect(help).toContain("gui gfx outline [--color <css-color>] [--size <pixels>] [--transition <fade|pop|draw>] [--fill <css-color>] [--duration <milliseconds>] -");
     expect(help).toContain("gui gfx scan [--duration <milliseconds>] -");
     expect(help).toContain("gui gfx xray [--duration <milliseconds>] -");
     expect(help).toContain("gui gfx spotlight [--color <css-color>] [--duration <milliseconds>] -");
     expect(help).toContain("gui gfx arrow [--color <css-color>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--target <anchor>] [--from <x> <y>] -");
     expect(help).toContain("gui gfx draw <shape> <x y width height | -> [--padding <pixels>] [--size <points>] [--color <css-color>] [--duration <milliseconds>] [--roughness <0..1>]");
     expect(help).toContain("share the same target contract");
-    expect(help).toContain("stdin `draw` share the same target contract");
+    expect(help).toContain("read one or more AX/VAT target-bearing JSON payloads from stdin");
+    expect(help).toContain("every leaf node with frame coordinates contributes a rect");
+    expect(help).toContain("`outline` accepts --color, --size, optional --fill, --duration, and --transition with fade, pop, or draw");
     expect(help).toContain("only drives the red scan-line overlay");
     expect(help).toContain("dims the complement outside that union");
     expect(help).toContain("`spotlight` accepts --color and --duration, defaults to color `rgba(0,0,0,.5)`, and uses 1200ms");

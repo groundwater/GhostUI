@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CLI_TEST_SKIP_OVERLAY_ENV,
   MAIN_MODULE_PATH,
+  PAYLOAD_MODULE_PATH,
   formatPayloadText,
   makeAXCursorPayload,
   makeAXPayload,
@@ -14,6 +15,7 @@ import {
   runProducerConsumer,
   type FramingMode,
 } from "./pipeline.fixtures.js";
+import type { AXNode } from "./ax.js";
 
 type GfxConsumer = "outline" | "xray" | "spotlight" | "arrow" | "scan";
 type PassthroughStage = "ca-highlight" | "gfx-outline" | "gfx-xray" | "gfx-spotlight" | "gfx-arrow" | "gfx-scan";
@@ -86,6 +88,50 @@ const cliTestEnv = {
   [CLI_TEST_SKIP_OVERLAY_ENV]: "1",
 };
 
+const BUILD_AX_QUERY_PAYLOADS_SCRIPT = `
+import { serializeAXQueryMatches } from ${JSON.stringify(new URL("../a11y/ax-query.ts", import.meta.url).pathname)};
+import { buildCLICompositionPayloadFromAXQueryMatch } from ${JSON.stringify(PAYLOAD_MODULE_PATH)};
+
+const tree = ${JSON.stringify({
+  role: "AXWindow",
+  title: "Settings",
+  children: [
+    {
+      role: "AXGroup",
+      children: [
+        {
+          role: "AXButton",
+          title: "Save",
+          frame: { x: 100, y: 100, width: 80, height: 40 },
+          actions: ["AXPress"],
+        },
+        {
+          role: "AXButton",
+          title: "Cancel",
+          frame: { x: 240, y: 100, width: 90, height: 40 },
+          actions: ["AXPress"],
+        },
+      ],
+    },
+  ],
+} satisfies AXNode)};
+
+const framing = process.argv[1];
+const matches = serializeAXQueryMatches([{ pid: 42, tree }], "Button", "each");
+const payloads = matches.map((match) => buildCLICompositionPayloadFromAXQueryMatch(match, "ax.query"));
+
+switch (framing) {
+  case "array":
+    process.stdout.write(JSON.stringify(payloads));
+    break;
+  case "ndjson":
+    process.stdout.write(payloads.map((payload) => JSON.stringify(payload)).join("\\n") + "\\n");
+    break;
+  default:
+    throw new Error(\`unknown framing \${framing}\`);
+}
+`;
+
 function expectedFirstFrameText(payload: unknown, framing: FramingMode): string {
   switch (framing) {
     case "compact":
@@ -129,6 +175,38 @@ describe("CLI pipeline process e2e AX -> gfx matrix", () => {
         expect(normalizeOutput(result.stderr)).toContain('AXButton "Save" is missing bounds/frame coordinates');
       });
     }
+  }
+});
+
+describe("CLI pipeline process e2e AX multi-match -> gfx outline", () => {
+  for (const framing of ["array", "ndjson"] as const) {
+    test(`outline accepts AX multi-match payload streams over ${framing} framing`, async () => {
+      const result = await runProducerConsumer(
+        "",
+        BUILD_AX_QUERY_PAYLOADS_SCRIPT,
+        [framing],
+        cliTestEnv,
+      );
+
+      const outlined = await runMainCLI(result.stdout, ["gfx", "outline", "-"], cliTestEnv);
+
+      expect(result.producerExitCode).toBe(0);
+      expect(result.exitCode).toBe(0);
+      expect(normalizeOutput(result.producerStderr)).toBe("");
+      expect(normalizeOutput(result.stderr)).toBe("");
+
+      expect(outlined.producerExitCode).toBe(0);
+      expect(outlined.exitCode).toBe(0);
+      expect(normalizeOutput(outlined.producerStderr)).toBe("");
+      expect(normalizeOutput(outlined.stderr)).toBe("");
+      expect(normalizeOutput(outlined.stdout)).toBe(
+        normalizeOutput(
+          framing === "array"
+            ? result.stdout
+            : result.stdout.split("\n")[0] ?? "",
+        ),
+      );
+    });
   }
 });
 

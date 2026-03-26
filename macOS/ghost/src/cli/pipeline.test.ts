@@ -95,6 +95,53 @@ describe("CLI pipeline contracts", () => {
     });
   });
 
+  test("fans multiple serialized AX query payloads into one outline script", () => {
+    const tree: AXNode = {
+      role: "AXWindow",
+      title: "Settings",
+      children: [
+        {
+          role: "AXGroup",
+          children: [
+            {
+              role: "AXButton",
+              title: "Save",
+              frame: { x: 100, y: 100, width: 80, height: 40 },
+              actions: ["AXPress"],
+            },
+            {
+              role: "AXButton",
+              title: "Cancel",
+              frame: { x: 240, y: 100, width: 90, height: 40 },
+              actions: ["AXPress"],
+            },
+          ],
+        },
+      ],
+    };
+
+    const matches = serializeAXQueryMatches([{ pid: 42, tree }], "Button", "each");
+    const payloadText = JSON.stringify(matches.map((match) =>
+      buildCLICompositionPayloadFromAXQueryMatch(match, "ax.query")
+    ));
+    const script = buildGfxOutlineDrawScriptFromText(payloadText);
+
+    expect(script).toEqual({
+      coordinateSpace: "screen",
+      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+      items: [
+        {
+          kind: "rect",
+          rect: { x: 100, y: 100, width: 80, height: 40 },
+        },
+        {
+          kind: "rect",
+          rect: { x: 240, y: 100, width: 90, height: 40 },
+        },
+      ],
+    });
+  });
+
   test("consumes the first serialized AX frame from NDJSON without waiting for EOF", async () => {
     const tree: AXNode = {
       role: "AXWindow",

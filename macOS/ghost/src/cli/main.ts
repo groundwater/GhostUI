@@ -1533,11 +1533,15 @@ export const DEFAULT_GFX_ARROW_DURATION_MS = 400;
 export const DEFAULT_GFX_ARROW_COLOR = "#FF3B30";
 export const DEFAULT_GFX_ARROW_SIZE = 6;
 export const DEFAULT_GFX_ARROW_LENGTH = 100;
+export const DEFAULT_GFX_OUTLINE_COLOR = "#00E5FF";
+export const DEFAULT_GFX_OUTLINE_SIZE = 2;
+export const DEFAULT_GFX_OUTLINE_FILL = "#00000000";
 export const DEFAULT_GFX_MARKER_DURATION_MS = 250;
 export const DEFAULT_GFX_MARKER_COLOR = "#FF3B30";
 export const DEFAULT_GFX_MARKER_SIZE = 4;
 export const DEFAULT_GFX_MARKER_PADDING = 0;
 export const DEFAULT_GFX_MARKER_ROUGHNESS = 0.2;
+export type GfxOutlineTransition = "fade" | "pop" | "draw";
 export type GfxArrowTarget =
   | "center"
   | "topleft"
@@ -1556,6 +1560,14 @@ export interface GfxMarkerOptions {
   padding: number;
   durationMs: number;
   roughness: number;
+}
+
+export interface GfxOutlineOptions {
+  color: string;
+  size: number;
+  fill: string;
+  durationMs: number;
+  transition?: GfxOutlineTransition;
 }
 
 function normalizeHighlightRect(value: unknown): CLICompositionRect | null {
@@ -1621,19 +1633,13 @@ function describeHighlightNode(node: PlainNode): string {
   return `${node._tag}${label ? ` "${label}"` : ""}`;
 }
 
-function collectVatHighlightRects(
+function collectLeafHighlightRects(
   nodes: PlainNode[] | null,
 ): { rects: CLICompositionRect[]; firstNodeWithoutBounds: PlainNode | null } {
   const rects: CLICompositionRect[] = [];
   const seen = new Set<string>();
   let firstNodeWithoutBounds: PlainNode | null = null;
   const walk = (node: PlainNode) => {
-    if (node._tag === "VATRoot") {
-      for (const child of node._children ?? []) {
-        walk(child);
-      }
-      return;
-    }
     if (node._children && node._children.length > 0) {
       for (const child of node._children) {
         walk(child);
@@ -1647,9 +1653,9 @@ function collectVatHighlightRects(
         seen.add(key);
         rects.push(rect);
       }
-    } else {
-      firstNodeWithoutBounds ??= node;
+      return;
     }
+    firstNodeWithoutBounds ??= node;
   };
   for (const node of nodes ?? []) {
     walk(node);
@@ -1657,32 +1663,34 @@ function collectVatHighlightRects(
   return { rects, firstNodeWithoutBounds };
 }
 
-function parseSingleGfxPayload(
+function parseGfxPayloads(
   input: string,
   usageLabel: string,
-): CLICompositionPayload {
+): CLICompositionPayload[] {
   const payloads = parseCLICompositionPayloadStream(input);
   if (payloads.length === 0) {
     throw new Error(`${usageLabel} received no JSON CLI payload on stdin`);
   }
-  if (payloads.length > 1) {
-    throw new Error(`${usageLabel} expected exactly one JSON CLI payload on stdin, received ${payloads.length}`);
-  }
-  return payloads[0]!;
+  return payloads;
 }
 
 function resolveGfxRectsFromPayload(
   payload: CLICompositionPayload,
   usageLabel: string,
 ): CLICompositionRect[] {
-  if (payload.source === "vat.query") {
-    const { rects, firstNodeWithoutBounds } = collectVatHighlightRects(payload.nodes);
-    if (rects.length > 0) {
-      return rects;
-    }
-    if (firstNodeWithoutBounds) {
-      throw new Error(`${usageLabel} ${describeHighlightNode(firstNodeWithoutBounds)} is missing bounds/frame coordinates`);
-    }
+  const nodes = payload.nodes ?? (payload.node ? [payload.node] : null);
+  const { rects, firstNodeWithoutBounds } = collectLeafHighlightRects(nodes);
+  if (rects.length > 0) {
+    return rects;
+  }
+  if (payload.rectUnion && payload.rectUnion.length > 0) {
+    return payload.rectUnion;
+  }
+  if (payload.bounds && payload.bounds.width > 0 && payload.bounds.height > 0) {
+    return [payload.bounds];
+  }
+  if (firstNodeWithoutBounds) {
+    throw new Error(`${usageLabel} ${describeHighlightNode(firstNodeWithoutBounds)} is missing bounds/frame coordinates`);
   }
   return [requireCLICompositionBounds(payload, usageLabel)];
 }
@@ -1691,13 +1699,85 @@ function resolveGfxRectsFromText(
   input: string,
   usageLabel: string,
 ): CLICompositionRect[] {
-  return resolveGfxRectsFromPayload(parseSingleGfxPayload(input, usageLabel), usageLabel);
+  const rects: CLICompositionRect[] = [];
+  const seen = new Set<string>();
+  for (const payload of parseGfxPayloads(input, usageLabel)) {
+    for (const rect of resolveGfxRectsFromPayload(payload, usageLabel)) {
+      const key = `${rect.x}:${rect.y}:${rect.width}:${rect.height}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        rects.push(rect);
+      }
+    }
+  }
+  return rects;
 }
 
-function buildOutlineItems(rects: CLICompositionRect[]): DrawScript["items"] {
+function insetRect(rect: CLICompositionRect, insetX: number, insetY: number): CLICompositionRect {
+  const width = Math.max(1, rect.width - insetX * 2);
+  const height = Math.max(1, rect.height - insetY * 2);
+  return {
+    x: rect.x + (rect.width - width) / 2,
+    y: rect.y + (rect.height - height) / 2,
+    width,
+    height,
+  };
+}
+
+function buildOutlineFromRect(
+  rect: CLICompositionRect,
+  options: GfxOutlineOptions,
+) {
+  switch (options.transition) {
+    case "fade":
+      return {
+        rect,
+        stroke: options.color,
+        fill: options.fill,
+        lineWidth: options.size,
+        opacity: 0,
+      };
+    case "pop":
+      return {
+        rect: insetRect(rect, rect.width * 0.12, rect.height * 0.12),
+        stroke: options.color,
+        fill: options.fill,
+        lineWidth: Math.max(1, options.size * 0.7),
+        opacity: 0,
+      };
+    case "draw":
+      return {
+        rect: {
+          x: rect.x,
+          y: rect.y,
+          width: 1,
+          height: rect.height,
+        },
+        stroke: options.color,
+        fill: DEFAULT_GFX_OUTLINE_FILL,
+        lineWidth: options.size,
+        opacity: 1,
+      };
+    default:
+      return undefined;
+  }
+}
+
+function buildOutlineItems(rects: CLICompositionRect[], options: GfxOutlineOptions): DrawScript["items"] {
   return rects.map((rect) => ({
     kind: "rect" as const,
     rect,
+    style: {
+      stroke: options.color,
+      fill: options.fill,
+      lineWidth: options.size,
+      cornerRadius: 8,
+      opacity: 1,
+    },
+    from: buildOutlineFromRect(rect, options),
+    animation: options.transition
+      ? { durMs: options.durationMs, ease: options.transition === "pop" ? "easeOut" as const : "easeInOut" as const }
+      : undefined,
   }));
 }
 
@@ -1866,10 +1946,15 @@ function buildGfxMarkerDrawScript(
 
 export function buildGfxOutlineDrawScriptFromText(
   input: string,
-  timeoutMs = DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+  options: GfxOutlineOptions = {
+    color: DEFAULT_GFX_OUTLINE_COLOR,
+    size: DEFAULT_GFX_OUTLINE_SIZE,
+    fill: DEFAULT_GFX_OUTLINE_FILL,
+    durationMs: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+  },
 ): DrawScript {
   const rects = resolveGfxRectsFromText(input, "gui gfx outline -");
-  return buildGfxDrawScript(rects, buildOutlineItems(rects), timeoutMs);
+  return buildGfxDrawScript(rects, buildOutlineItems(rects, options), options.durationMs);
 }
 
 export function buildGfxXrayDrawScriptFromText(
@@ -1958,7 +2043,10 @@ export function buildAXHighlightDrawScriptFromText(
   timeoutMs = DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
 ): DrawScript {
   const rects = resolveGfxRectsFromText(input, "gui ca highlight -");
-  return buildGfxDrawScript(rects, buildOutlineItems(rects), timeoutMs);
+  return buildGfxDrawScript(rects, rects.map((rect) => ({
+    kind: "rect" as const,
+    rect,
+  })), timeoutMs);
 }
 
 export function buildGfxScanOverlayRequestFromText(
@@ -2172,6 +2260,75 @@ export function parseGfxSpotlightOptions(
   }
 
   return { color, durationMs };
+}
+
+export function parseGfxOutlineOptions(
+  argv: string[],
+  usageTopic: string,
+): GfxOutlineOptions {
+  let color = DEFAULT_GFX_OUTLINE_COLOR;
+  let size = DEFAULT_GFX_OUTLINE_SIZE;
+  let fill = DEFAULT_GFX_OUTLINE_FILL;
+  let durationMs = DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS;
+  let transition: GfxOutlineTransition | undefined;
+
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (token === "--color") {
+      const raw = argv[index + 1];
+      if (!raw) {
+        failUsage(usageTopic, "--color requires a CSS color like #RGB[A], #RRGGBB[AA], rgb(...), or rgba(...).");
+      }
+      color = parseGfxColor(raw, `${usageTopic} --color`);
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+    if (token === "--size") {
+      const raw = argv[index + 1];
+      const parsed = Number(raw);
+      if (!raw || !Number.isFinite(parsed) || parsed <= 0) {
+        failUsage(usageTopic, "--size requires a positive number of pixels.");
+      }
+      size = parsed;
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+    if (token === "--fill") {
+      const raw = argv[index + 1];
+      if (!raw) {
+        failUsage(usageTopic, "--fill requires a CSS color like #RGB[A], #RRGGBB[AA], rgb(...), or rgba(...).");
+      }
+      fill = parseGfxColor(raw, `${usageTopic} --fill`);
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+    if (token === "--duration") {
+      const raw = argv[index + 1];
+      const parsed = Number(raw);
+      if (!raw || !Number.isFinite(parsed) || parsed <= 0) {
+        failUsage(usageTopic, "--duration requires a positive number of milliseconds.");
+      }
+      durationMs = parsed;
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+    if (token === "--transition") {
+      const raw = argv[index + 1];
+      if (raw !== "fade" && raw !== "pop" && raw !== "draw") {
+        failUsage(usageTopic, "--transition requires one of fade, pop, or draw.");
+      }
+      transition = raw;
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+  }
+
+  return { color, size, fill, durationMs, transition };
 }
 
 export function parseGfxArrowOptions(
@@ -2553,11 +2710,12 @@ async function main() {
         const gfxArgs = args.slice(2);
         switch (gfxCmd) {
           case "outline": {
+            const outlineOptions = parseGfxOutlineOptions(gfxArgs, "gfx outline");
             if (gfxArgs.length !== 1 || gfxArgs[0] !== "-") {
               failUsage("gfx outline");
             }
             const input = await readFirstJSONFrame(Bun.stdin.stream());
-            await attachDrawOverlay(buildGfxOutlineDrawScriptFromText(input));
+            await attachDrawOverlay(buildGfxOutlineDrawScriptFromText(input, outlineOptions));
             emitPassthroughStdout(input, process.stdout.isTTY);
             break;
           }

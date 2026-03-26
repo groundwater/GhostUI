@@ -30,6 +30,9 @@ import {
   DEFAULT_GFX_ARROW_LENGTH,
   DEFAULT_GFX_ARROW_SIZE,
   DEFAULT_GFX_ARROW_TARGET,
+  DEFAULT_GFX_OUTLINE_COLOR,
+  DEFAULT_GFX_OUTLINE_FILL,
+  DEFAULT_GFX_OUTLINE_SIZE,
   DEFAULT_GFX_MARKER_COLOR,
   DEFAULT_GFX_MARKER_DURATION_MS,
   DEFAULT_GFX_MARKER_PADDING,
@@ -72,6 +75,7 @@ import {
   formatVatMountError,
   parseGfxArrowOptions,
   parseGfxDuration,
+  parseGfxOutlineOptions,
   parseGfxSpotlightOptions,
   parseGfxMarkerOptions,
   resolveActorRunInvocation,
@@ -603,6 +607,52 @@ describe("vat query rendering", () => {
       source: "vat.query",
       bounds: { x: 903, y: 39, width: 18, height: 18 },
     });
+  });
+
+  test("backfills rect unions from legacy VAT payload nodes", () => {
+    const payload = parseSingleCLICompositionPayload(JSON.stringify({
+      type: "gui.payload",
+      version: 1,
+      source: "vat.query",
+      query: "Window[frame]",
+      tree: null,
+      nodes: [
+        {
+          _tag: "VATRoot",
+          _children: [
+            {
+              _tag: "Application",
+              _children: [
+                {
+                  _tag: "Window",
+                  title: "One",
+                  frame: { x: 40, y: 50, width: 300, height: 200 },
+                },
+                {
+                  _tag: "Window",
+                  title: "Two",
+                  frame: { x: 400, y: 50, width: 320, height: 220 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      matchCount: 2,
+      node: null,
+      target: null,
+      cursor: null,
+      axQueryMatch: null,
+      vatQueryPlan: null,
+      bounds: null,
+      point: null,
+      issues: [],
+    }), "stdin");
+
+    expect(payload.rectUnion).toEqual([
+      { x: 40, y: 50, width: 300, height: 200 },
+      { x: 400, y: 50, width: 320, height: 220 },
+    ]);
   });
 });
 
@@ -1233,6 +1283,15 @@ describe("gfx payload bridges", () => {
         {
           kind: "rect",
           rect: { x: 894, y: 34, width: 31, height: 28 },
+          style: {
+            stroke: DEFAULT_GFX_OUTLINE_COLOR,
+            fill: DEFAULT_GFX_OUTLINE_FILL,
+            lineWidth: DEFAULT_GFX_OUTLINE_SIZE,
+            cornerRadius: 8,
+            opacity: 1,
+          },
+          from: undefined,
+          animation: undefined,
         },
       ],
     });
@@ -1335,6 +1394,161 @@ describe("gfx payload bridges", () => {
         {
           kind: "rect",
           rect: { x: 100, y: 100, width: 80, height: 40 },
+          style: {
+            stroke: DEFAULT_GFX_OUTLINE_COLOR,
+            fill: DEFAULT_GFX_OUTLINE_FILL,
+            lineWidth: DEFAULT_GFX_OUTLINE_SIZE,
+            cornerRadius: 8,
+            opacity: 1,
+          },
+          from: undefined,
+          animation: undefined,
+        },
+      ],
+    });
+  });
+
+  test("builds gfx outline draw scripts with explicit styling and fade transition", () => {
+    expect(buildGfxOutlineDrawScriptFromText(JSON.stringify(target), {
+      color: "#FF3B30",
+      size: 4,
+      fill: "rgba(255,59,48,0.2)",
+      durationMs: 900,
+      transition: "fade",
+    })).toEqual({
+      coordinateSpace: "screen",
+      timeout: 900,
+      items: [
+        {
+          kind: "rect",
+          rect: { x: 100, y: 100, width: 80, height: 40 },
+          style: {
+            stroke: "#FF3B30",
+            fill: "rgba(255,59,48,0.2)",
+            lineWidth: 4,
+            cornerRadius: 8,
+            opacity: 1,
+          },
+          from: {
+            rect: { x: 100, y: 100, width: 80, height: 40 },
+            stroke: "#FF3B30",
+            fill: "rgba(255,59,48,0.2)",
+            lineWidth: 4,
+            opacity: 0,
+          },
+          animation: {
+            durMs: 900,
+            ease: "easeInOut",
+          },
+        },
+      ],
+    });
+  });
+
+  test("builds gfx outline draw scripts from multiple AX query matches", () => {
+    expect(buildGfxOutlineDrawScriptFromText(JSON.stringify([
+      {
+        type: "ax.query-match",
+        pid: 4321,
+        node: { _tag: "AXButton", _id: "Save", _frame: "(100,100,80,40)" },
+        target,
+      },
+      {
+        type: "ax.query-match",
+        pid: 4321,
+        node: { _tag: "AXButton", _id: "Cancel", _frame: "(240,120,60,30)" },
+        target: {
+          ...target,
+          point: { x: 270, y: 135 },
+          bounds: { x: 240, y: 120, width: 60, height: 30 },
+          title: "Cancel",
+          identifier: "cancel-button",
+        },
+      },
+    ]))).toEqual({
+      coordinateSpace: "screen",
+      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+      items: [
+        {
+          kind: "rect",
+          rect: { x: 100, y: 100, width: 80, height: 40 },
+          style: {
+            stroke: DEFAULT_GFX_OUTLINE_COLOR,
+            fill: DEFAULT_GFX_OUTLINE_FILL,
+            lineWidth: DEFAULT_GFX_OUTLINE_SIZE,
+            cornerRadius: 8,
+            opacity: 1,
+          },
+          from: undefined,
+          animation: undefined,
+        },
+        {
+          kind: "rect",
+          rect: { x: 240, y: 120, width: 60, height: 30 },
+          style: {
+            stroke: DEFAULT_GFX_OUTLINE_COLOR,
+            fill: DEFAULT_GFX_OUTLINE_FILL,
+            lineWidth: DEFAULT_GFX_OUTLINE_SIZE,
+            cornerRadius: 8,
+            opacity: 1,
+          },
+          from: undefined,
+          animation: undefined,
+        },
+      ],
+    });
+  });
+
+  test("builds gfx outline draw scripts from rect-union-only payloads", () => {
+    expect(buildGfxOutlineDrawScriptFromText(JSON.stringify({
+      type: "gui.payload",
+      version: 1,
+      source: "ax.query-match",
+      query: null,
+      tree: null,
+      nodes: null,
+      matchCount: 2,
+      node: null,
+      target: null,
+      cursor: null,
+      axQueryMatch: null,
+      vatQueryPlan: null,
+      rectUnion: [
+        { x: 100, y: 100, width: 80, height: 40 },
+        { x: 240, y: 120, width: 60, height: 30 },
+      ],
+      bounds: { x: 100, y: 100, width: 80, height: 40 },
+      point: { x: 140, y: 120 },
+      issues: [],
+    }))).toEqual({
+      coordinateSpace: "screen",
+      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+      items: [
+        {
+          kind: "rect",
+          rect: { x: 100, y: 100, width: 80, height: 40 },
+          style: {
+            stroke: DEFAULT_GFX_OUTLINE_COLOR,
+            fill: DEFAULT_GFX_OUTLINE_FILL,
+            lineWidth: DEFAULT_GFX_OUTLINE_SIZE,
+            cornerRadius: 8,
+            opacity: 1,
+          },
+          from: undefined,
+          animation: undefined,
+        },
+        {
+          kind: "rect",
+          rect: { x: 240, y: 120, width: 60, height: 30 },
+          style: {
+            stroke: DEFAULT_GFX_OUTLINE_COLOR,
+            fill: DEFAULT_GFX_OUTLINE_FILL,
+            lineWidth: DEFAULT_GFX_OUTLINE_SIZE,
+            cornerRadius: 8,
+            opacity: 1,
+          },
+          from: undefined,
+          animation: undefined,
         },
       ],
     });
@@ -1454,6 +1668,18 @@ describe("gfx payload bridges", () => {
     expect(parseGfxSpotlightOptions(args, "gfx spotlight")).toEqual({
       color: "rgba(255, 59, 48, 0.35)",
       durationMs: 900,
+    });
+    expect(args).toEqual(["-"]);
+  });
+
+  test("parses gfx outline options and strips consumed flags", () => {
+    const args = ["--color", "#FF3B30", "--size", "5", "--transition", "pop", "--fill", "rgba(255,59,48,0.2)", "--duration", "850", "-"];
+    expect(parseGfxOutlineOptions(args, "gfx outline")).toEqual({
+      color: "#FF3B30",
+      size: 5,
+      fill: "rgba(255,59,48,0.2)",
+      durationMs: 850,
+      transition: "pop",
     });
     expect(args).toEqual(["-"]);
   });
@@ -2026,6 +2252,7 @@ describe("ax query rendering", () => {
           cardinality: "all",
           scope: { kind: "app", app: "Codex" },
         },
+        rectUnion: null,
         bounds: null,
         point: null,
         issues: [],
@@ -2068,6 +2295,7 @@ describe("ax query rendering", () => {
         node: { _tag: "AXApplication", title: "Codex" },
       },
       vatQueryPlan: null,
+      rectUnion: null,
       bounds: null,
       point: null,
       issues: [],

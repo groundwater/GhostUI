@@ -122,6 +122,34 @@ describe("draw script normalization", () => {
     });
   });
 
+  test("preserves explicit rect from style settings", () => {
+    const result = normalizeDrawScriptPayload({
+      items: [
+        {
+          kind: "rect",
+          from: {
+            rect: { x: 10, y: 20, width: 30, height: 40 },
+            cornerRadius: 2,
+            stroke: "#FF0000",
+            fill: "#00000000",
+            lineWidth: 5,
+            opacity: 0.25,
+          },
+          rect: { x: 100, y: 200, width: 300, height: 400 },
+        },
+      ],
+    });
+
+    expect((result.items[0] as DrawRectItem)?.from).toEqual({
+      rect: { x: 10, y: 20, width: 30, height: 40 },
+      cornerRadius: 2,
+      stroke: "#FF0000",
+      fill: "#00000000",
+      lineWidth: 5,
+      opacity: 0.25,
+    });
+  });
+
   test("supports id-based updates", () => {
     const result = normalizeDrawScriptPayload({
       items: [

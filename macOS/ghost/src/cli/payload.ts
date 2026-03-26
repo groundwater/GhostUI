@@ -35,6 +35,7 @@ export interface CLICompositionPayload {
   cursor: AXCursor | null;
   axQueryMatch: AXQuerySerializedMatch | null;
   vatQueryPlan: VatA11YQueryPlan | null;
+  rectUnion: CLICompositionRect[] | null;
   bounds: CLICompositionRect | null;
   point: CLICompositionPoint | null;
   issues: string[];
@@ -188,6 +189,45 @@ function boundsFromPlainNode(node: PlainNode | null | undefined): CLIComposition
   return { x, y, width, height };
 }
 
+function collectRectUnionFromNodes(nodes: PlainNode[] | null | undefined): CLICompositionRect[] {
+  const rects: CLICompositionRect[] = [];
+  const seen = new Set<string>();
+
+  const pushRect = (rect: CLICompositionRect | null) => {
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      return;
+    }
+    const key = `${rect.x}:${rect.y}:${rect.width}:${rect.height}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    rects.push(rect);
+  };
+
+  const walk = (node: PlainNode) => {
+    if (node._tag === "VATRoot") {
+      for (const child of node._children ?? []) {
+        walk(child);
+      }
+      return;
+    }
+    if (node._children && node._children.length > 0) {
+      for (const child of node._children) {
+        walk(child);
+      }
+      return;
+    }
+    pushRect(boundsFromPlainNode(node));
+  };
+
+  for (const node of nodes ?? []) {
+    walk(node);
+  }
+
+  return rects;
+}
+
 function findPrimaryVatNode(root: PlainNode | null | undefined): PlainNode | null {
   if (!root) return null;
   function walk(node: PlainNode): { boundsNode: PlainNode | null; fallbackNode: PlainNode | null } {
@@ -265,6 +305,7 @@ export function buildCLICompositionPayloadFromAXTarget(
     cursor: null,
     axQueryMatch: null,
     vatQueryPlan: null,
+    rectUnion: target.bounds ? [target.bounds] : null,
     bounds: target.bounds ?? null,
     point: target.point,
     issues: [],
@@ -287,6 +328,7 @@ export function buildCLICompositionPayloadFromAXQueryMatch(
   vatQueryPlan: VatA11YQueryPlan | null = null,
 ): CLICompositionPayload {
   const target = match.target ? assertAXTarget(match.target, `${source}.target`) : null;
+  const bounds = target?.bounds ?? boundsFromPlainNode(match.node);
   return {
     type: "gui.payload",
     version: 1,
@@ -300,8 +342,9 @@ export function buildCLICompositionPayloadFromAXQueryMatch(
     cursor: null,
     axQueryMatch: match,
     vatQueryPlan,
-    bounds: target?.bounds ?? boundsFromPlainNode(match.node),
-    point: target?.point ?? (target?.bounds ? centerPoint(target.bounds) : null),
+    rectUnion: bounds ? [bounds] : null,
+    bounds,
+    point: target?.point ?? (bounds ? centerPoint(bounds) : null),
     issues: match.targetError ? [match.targetError] : [],
   };
 }
@@ -314,6 +357,7 @@ export function buildCLICompositionPayloadFromVatQueryResult(
 ): CLICompositionPayload {
   const node = nodes.length === 1 ? findPrimaryVatNode(nodes[0]) : null;
   const bounds = boundsFromPlainNode(node);
+  const rectUnion = collectRectUnionFromNodes(nodes);
   return {
     type: "gui.payload",
     version: 1,
@@ -327,6 +371,7 @@ export function buildCLICompositionPayloadFromVatQueryResult(
     cursor: null,
     axQueryMatch: null,
     vatQueryPlan: null,
+    rectUnion: rectUnion.length > 0 ? rectUnion : null,
     bounds,
     point: bounds ? centerPoint(bounds) : null,
     issues: [],
@@ -391,6 +436,23 @@ export function normalizeCLICompositionPayload(value: unknown, label = "payload"
     ? value.issues.filter((item): item is string => typeof item === "string")
     : [];
 
+  let rectUnion: CLICompositionRect[] | null = null;
+  if (Array.isArray(value.rectUnion)) {
+    const parsed = value.rectUnion
+      .map((item) => normalizeRect(item))
+      .filter((r): r is CLICompositionRect => r !== null);
+    if (parsed.length > 0) rectUnion = parsed;
+  }
+  if (!rectUnion) {
+    const derivedRectUnion = collectRectUnionFromNodes(normalizedNodes);
+    if (derivedRectUnion.length > 0) {
+      rectUnion = derivedRectUnion;
+    }
+  }
+  if (!rectUnion && bounds) {
+    rectUnion = [bounds];
+  }
+
   return {
     type: "gui.payload",
     version: 1,
@@ -404,6 +466,7 @@ export function normalizeCLICompositionPayload(value: unknown, label = "payload"
     cursor,
     axQueryMatch,
     vatQueryPlan,
+    rectUnion,
     bounds,
     point,
     issues,

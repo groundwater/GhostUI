@@ -88,10 +88,10 @@ const HELP_TOPICS: HelpTopic[] = [
   {
     id: "gfx",
     title: "Render visual annotation overlays",
-    summary: "Resolve one AX/VAT target-bearing payload from stdin and render it through the public visual-annotation command family.",
+    summary: "Resolve AX/VAT payloads from stdin and render them through the public visual-annotation command family.",
     aliases: [],
     usage: [
-      "gui gfx outline -",
+      "gui gfx outline [--color <css-color>] [--size <pixels>] [--transition <fade|pop|draw>] [--fill <css-color>] [--duration <milliseconds>] -",
       "gui gfx scan [--duration <milliseconds>] -",
       "gui gfx xray [--duration <milliseconds>] -",
       "gui gfx spotlight [--color <css-color>] [--duration <milliseconds>] -",
@@ -99,7 +99,7 @@ const HELP_TOPICS: HelpTopic[] = [
       "gui gfx draw <shape> <x y width height | -> [--padding <pixels>] [--size <points>] [--color <css-color>] [--duration <milliseconds>] [--roughness <0..1>]",
     ],
     examples: [
-      "gui ax query --only --app Terminal '@@{Button[subrole~=DecrementPage]}' | gui gfx outline -",
+      "gui ax query --only --app Terminal '@@{Button[subrole~=DecrementPage]}' | gui gfx outline --color '#00E5FF' --size 3 -",
       "gui vat query 'Window[frame]' | gui gfx scan --duration 750 -",
       "gui vat query 'Window[frame]' | gui gfx xray -",
       "gui vat query 'Window[frame]' | gui gfx spotlight --color 'rgba(0,0,0,0.35)' --duration 900 -",
@@ -107,8 +107,9 @@ const HELP_TOPICS: HelpTopic[] = [
       "gui vat query 'Window[frame]' | gui gfx draw check - --padding 8 --size 4 --color 'rgba(255,59,48,0.9)'",
     ],
     notes: [
-      "The stdin-driven subcommands read exactly one AX/VAT target-bearing JSON payload from stdin; `draw` also accepts a literal box.",
-      "`outline`, `xray`, `spotlight`, `arrow`, and stdin `draw` share the same target contract: VAT query payloads expand over every bounds-bearing descendant in deterministic traversal order, while AX payloads render once from their single target bounds.",
+      "The stdin-driven subcommands read one or more AX/VAT target-bearing JSON payloads from stdin; `draw` also accepts a literal box.",
+      "`outline`, `xray`, `spotlight`, `arrow`, and stdin `draw` share the same target contract: every leaf node with frame coordinates contributes a rect in deterministic traversal order, and payloads without leaf-frame nodes fall back to their top-level bounds.",
+      "`outline` accepts --color, --size, optional --fill, --duration, and --transition with fade, pop, or draw. Omit --fill for a hollow outline.",
       "`scan` resolves the same AX/VAT bounds but only drives the red scan-line overlay; it does not add outline/highlight rects.",
       "`spotlight` does not outline the target. It computes the union of all resolved bounds and dims the complement outside that union.",
       "`spotlight` accepts --color and --duration, defaults to color `rgba(0,0,0,.5)`, and uses 1200ms like the other non-scan/xray overlay lifetimes.",
