@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { rmSync } from "fs";
 import { fileURLToPath, pathToFileURL } from "url";
-import type { AXQueryMatch, AXQueryScopeInput, AXTarget } from "./ax.js";
+import type { AXQueryScopeInput, AXTarget } from "./ax.js";
 import { ACTOR_CLICK_PASSTHROUGH_DELAY_MS } from "../actors/protocol.js";
 import { axTargetFromPoint } from "../a11y/ax-target.js";
 import {
@@ -16,7 +16,6 @@ import {
 import {
   buildActorClickPassthroughRequest,
   buildActorMovePassthroughRequest,
-  buildAXHighlightDrawScriptFromText,
   buildGfxArrowDrawScriptFromText,
   buildGfxOutlineDrawScriptFromText,
   buildGfxScanOverlayRequestFromText,
@@ -985,7 +984,7 @@ describe("actor run usage rendering", () => {
   });
 });
 
-describe("ca highlight AX bridge", () => {
+describe("gfx payload bridges", () => {
   const target: AXTarget = {
     type: "ax.target",
     pid: 4321,
@@ -996,139 +995,6 @@ describe("ca highlight AX bridge", () => {
     label: null,
     identifier: "save-button",
   };
-
-  test("builds a draw script from a piped AX query match", () => {
-    const match: AXQueryMatch = {
-      type: "ax.query-match",
-      pid: 4321,
-      node: { _tag: "AXButton", _id: "Save" },
-      target,
-    };
-
-    expect(buildAXHighlightDrawScriptFromText(JSON.stringify(match))).toEqual({
-      coordinateSpace: "screen",
-      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
-      items: [
-        {
-          kind: "rect",
-          rect: { x: 100, y: 100, width: 80, height: 40 },
-        },
-      ],
-    });
-  });
-
-  test("rejects AX target payloads without usable bounds", () => {
-    const targetWithoutBounds: AXTarget = {
-      ...target,
-      bounds: undefined,
-    };
-
-    expect(() => buildAXHighlightDrawScriptFromText(JSON.stringify(targetWithoutBounds)))
-      .toThrow('gui ca highlight - AXButton "Save" is missing bounds/frame coordinates');
-  });
-
-  test("builds a draw script from a piped VAT query payload", () => {
-    const tree: PlainNode = {
-      _tag: "VATRoot",
-      _children: [
-        {
-          _tag: "Application",
-          title: "Terminal",
-          frame: { x: 40, y: 50, width: 600, height: 300 },
-        },
-      ],
-    };
-
-    expect(buildAXHighlightDrawScriptFromText(formatVatQueryOutput(tree, "Application", false))).toEqual({
-      coordinateSpace: "screen",
-      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
-      items: [
-        {
-          kind: "rect",
-          rect: { x: 40, y: 50, width: 600, height: 300 },
-        },
-      ],
-    });
-  });
-
-  test("fans out VAT highlights over every framed descendant in traversal order", () => {
-    const tree: PlainNode = {
-      _tag: "VATRoot",
-      _children: [
-        {
-          _tag: "Application",
-          title: "Terminal",
-          _children: [
-            {
-              _tag: "Window",
-              title: "One",
-              frame: { x: 40, y: 50, width: 300, height: 200 },
-            },
-            {
-              _tag: "Window",
-              title: "Two",
-              frame: { x: 400, y: 50, width: 320, height: 220 },
-            },
-          ],
-        },
-      ],
-    };
-
-    expect(buildAXHighlightDrawScriptFromText(formatVatQueryOutput(tree, "Window[frame]", false))).toEqual({
-      coordinateSpace: "screen",
-      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
-      items: [
-        {
-          kind: "rect",
-          rect: { x: 40, y: 50, width: 300, height: 200 },
-        },
-        {
-          kind: "rect",
-          rect: { x: 400, y: 50, width: 320, height: 220 },
-        },
-      ],
-    });
-  });
-
-  test("picks a nested bounds-bearing VAT descendant as the primary node", () => {
-    const tree: PlainNode = {
-      _tag: "VATRoot",
-      _children: [
-        {
-          _tag: "Application",
-          _children: [
-            {
-              _tag: "Window",
-              _children: [
-                {
-                  _tag: "Button",
-                  title: "Save",
-                  frame: { x: 40, y: 50, width: 600, height: 300 },
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const payload = buildCLICompositionPayloadFromVatQueryResult("Application", tree, [tree._children![0]], 1);
-
-    expect(payload.node).toEqual({
-      _tag: "Button",
-      title: "Save",
-      frame: { x: 40, y: 50, width: 600, height: 300 },
-    });
-    expect(buildAXHighlightDrawScriptFromText(JSON.stringify(payload))).toEqual({
-      coordinateSpace: "screen",
-      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
-      items: [
-        {
-          kind: "rect",
-          rect: { x: 40, y: 50, width: 600, height: 300 },
-        },
-      ],
-    });
-  });
 
   test("prefers a framed VAT descendant over a labeled ancestor without bounds", () => {
     const tree: PlainNode = {
@@ -1164,73 +1030,6 @@ describe("ca highlight AX bridge", () => {
       _frame: { x: 894, y: 34, width: 31, height: 28 },
     });
     expect(payload.bounds).toEqual({ x: 894, y: 34, width: 31, height: 28 });
-    expect(buildAXHighlightDrawScriptFromText(JSON.stringify(payload))).toEqual({
-      coordinateSpace: "screen",
-      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
-      items: [
-        {
-          kind: "rect",
-          rect: { x: 220, y: 24, width: 900, height: 720 },
-        },
-        {
-          kind: "rect",
-          rect: { x: 894, y: 34, width: 31, height: 28 },
-        },
-      ],
-    });
-  });
-
-  test("deduplicates duplicate VAT descendant frames", () => {
-    const tree: PlainNode = {
-      _tag: "VATRoot",
-      _children: [
-        {
-          _tag: "Application",
-          title: "Terminal",
-          _children: [
-            {
-              _tag: "Window",
-              title: "One",
-              frame: { x: 40, y: 50, width: 300, height: 200 },
-            },
-            {
-              _tag: "WindowGroup",
-              _children: [
-                {
-                  _tag: "Window",
-                  title: "One duplicate",
-                  frame: { x: 40, y: 50, width: 300, height: 200 },
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-
-    expect(buildAXHighlightDrawScriptFromText(formatVatQueryOutput(tree, "Window[frame]", false))).toEqual({
-      coordinateSpace: "screen",
-      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
-      items: [
-        {
-          kind: "rect",
-          rect: { x: 40, y: 50, width: 300, height: 200 },
-        },
-      ],
-    });
-  });
-
-  test("keeps AX payloads on the single-rect path", () => {
-    expect(buildAXHighlightDrawScriptFromText(JSON.stringify(target))).toEqual({
-      coordinateSpace: "screen",
-      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
-      items: [
-        {
-          kind: "rect",
-          rect: { x: 100, y: 100, width: 80, height: 40 },
-        },
-      ],
-    });
   });
 
   test("builds gfx outline draw scripts from AX payloads", () => {
@@ -1505,21 +1304,6 @@ describe("ca highlight AX bridge", () => {
         ease: "easeInOut",
       },
     });
-  });
-
-  test("rejects VAT query payloads without bounds/frame coordinates", () => {
-    const tree: PlainNode = {
-      _tag: "VATRoot",
-      _children: [
-        {
-          _tag: "Application",
-          title: "Terminal",
-        },
-      ],
-    };
-
-    expect(() => buildAXHighlightDrawScriptFromText(formatVatQueryOutput(tree, "Application", false)))
-      .toThrow('gui ca highlight - Application "Terminal" is missing bounds/frame coordinates');
   });
 
   test("preserves the original stdin payload for passthrough stages", () => {

@@ -1731,14 +1731,6 @@ export function buildGfxArrowDrawScriptFromText(
   return buildGfxDrawScript(rects, buildArrowItems(rects, resolvedOptions), DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
 }
 
-export function buildAXHighlightDrawScriptFromText(
-  input: string,
-  timeoutMs = DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
-): DrawScript {
-  const rects = resolveGfxRectsFromText(input, "gui ca highlight -");
-  return buildGfxDrawScript(rects, buildOutlineItems(rects), timeoutMs);
-}
-
 export function buildGfxScanOverlayRequestFromText(
   input: string,
   durationMs = DEFAULT_GFX_SCAN_DURATION_MS,
@@ -2159,21 +2151,6 @@ async function main() {
             }
             const payload = normalizeDrawScriptText(await readStdinText(`${command} script -`));
             await attachDrawOverlay(payload);
-            break;
-          }
-          case "highlight": {
-            const highlightArgs = args.slice(2);
-            const timeoutMs = parseGfxTimeout(highlightArgs, "ca highlight", DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
-            if (highlightArgs.length !== 1 || highlightArgs[0] !== "-") {
-              failUsage("ca highlight");
-            }
-            const input = await readStdinText(`${command} highlight -`);
-            const payload = buildAXHighlightDrawScriptFromText(
-              input,
-              timeoutMs,
-            );
-            await attachDrawOverlay(payload);
-            emitPassthroughStdout(input, process.stdout.isTTY);
             break;
           }
           default:
