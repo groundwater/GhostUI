@@ -60,8 +60,8 @@ export type ActorAction =
   | { kind: "dismiss" }
   | { kind: "draw"; shape: CanvasDrawShape; style: CanvasDrawStyle; box?: CanvasBox; boxes?: CanvasBox[] }
   | { kind: "text"; text: string; style: CanvasTextStyle; box?: CanvasBox }
-  | { kind: "rect"; rects: CanvasBox[]; padding: number; blur: number }
-  | { kind: "circ"; rects: CanvasBox[]; padding: number; blur: number }
+  | { kind: "rect"; rects: CanvasBox[]; padding: number; blur: number; speed?: number }
+  | { kind: "circ"; rects: CanvasBox[]; padding: number; blur: number; speed?: number }
   | { kind: "on"; transition: SpotlightTransition }
   | { kind: "off"; transition: SpotlightTransition }
   | { kind: "color"; color: string }
@@ -290,6 +290,47 @@ export function normalizeActorRunRequest(value: unknown): ActorRunRequest {
       };
     case "dismiss":
       return { timeoutMs, action: { kind } };
+    case "rect":
+    case "circ": {
+      const rects = Array.isArray(record.rects)
+        ? record.rects.map((rect, index) => normalizeCanvasBox(rect, `rects[${index}]`))
+        : undefined;
+      if (!rects || rects.length === 0) {
+        throw new ActorApiError("invalid_args", `${kind} requires rects`);
+      }
+      return {
+        timeoutMs,
+        action: {
+          kind,
+          rects,
+          padding: record.padding === undefined ? 0 : expectNonNegativeNumber(record.padding, "padding"),
+          blur: record.blur === undefined ? 0 : expectNonNegativeNumber(record.blur, "blur"),
+          speed: record.speed === undefined ? undefined : expectPositiveNumber(record.speed, "speed"),
+        },
+      };
+    }
+    case "on":
+    case "off": {
+      const transitionRaw = record.transition === undefined ? "fade" : expectString(record.transition, "transition");
+      if (transitionRaw !== "fade" && transitionRaw !== "instant") {
+        throw new ActorApiError("invalid_args", "transition must be one of fade, instant");
+      }
+      return {
+        timeoutMs,
+        action: {
+          kind,
+          transition: transitionRaw,
+        },
+      };
+    }
+    case "color":
+      return {
+        timeoutMs,
+        action: {
+          kind,
+          color: normalizeCssColorString(expectString(record.color, "color"), "color"),
+        },
+      };
     case "draw": {
       const shape = expectCanvasDrawShape(record.shape, "shape");
       const styleRecord = isRecord(record.style) ? record.style : {};
@@ -674,6 +715,12 @@ export function parseActorRunCLIArgs(actionName: string, args: string[], stdinTe
           index--;
           continue;
         }
+        if (token === "--speed") {
+          style.speed = expectPositiveNumber(Number(requireOptionValue(rest, index, "--speed")), "--speed");
+          rest.splice(index, 2);
+          index--;
+          continue;
+        }
       }
       if (rest.length > 0) {
         throw new ActorApiError("invalid_args", `Unknown ${actionName} args: ${rest.join(" ")}`);
@@ -686,6 +733,7 @@ export function parseActorRunCLIArgs(actionName: string, args: string[], stdinTe
           rects,
           padding: style.padding === undefined ? 0 : expectNonNegativeNumber(style.padding, "padding"),
           blur: style.blur === undefined ? 0 : expectNonNegativeNumber(style.blur, "blur"),
+          speed: style.speed === undefined ? undefined : expectPositiveNumber(style.speed, "speed"),
         },
       };
     }

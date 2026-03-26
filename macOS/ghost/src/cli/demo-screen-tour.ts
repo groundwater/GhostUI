@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * demo-screen-tour.ts — Live screen-tour runner using pointer + canvas actors.
+ * demo-screen-tour.ts — Live screen-tour runner using pointer, canvas, and spotlight actors.
  *
  * Discovers visible windows dynamically from live AX queries and narrates a
  * tour with pointer movement, canvas annotations, and overlay text.
@@ -69,6 +69,7 @@ interface DemoScreenTourOptions {
   durationSeconds: number;
   pointerName: string;
   canvasName: string;
+  spotlightName: string;
   env: NodeJS.ProcessEnv;
 }
 
@@ -86,6 +87,23 @@ interface DrawStyle {
   padding?: number;
   size?: number;
   color?: string;
+}
+
+type OutlineTransition = "fade" | "pop" | "draw";
+
+interface OutlineStyle {
+  color?: string;
+  size?: number;
+  transition?: OutlineTransition;
+  fill?: string;
+  durationMs?: number;
+}
+
+type SpotlightTransition = "fade" | "instant";
+
+interface SpotlightStyle {
+  padding?: number;
+  blur?: number;
 }
 
 interface WindowTourState {
@@ -380,10 +398,9 @@ class DemoScreenTour {
         await this.pointerMove(state.titleBar.x + state.titleBar.width / 2, state.titleBar.y + state.titleBar.height / 2, "purposeful");
         await this.sleep(400);
         await this.canvasClear();
-        await this.rect(state.window, {
-          padding: 6,
-          size: 4,
-          color: "rgba(59,130,246,0.85)",
+        await this.spotlightRect(state.window, {
+          padding: 8,
+          blur: 16,
         });
         await this.pointerNarrate(
           state.index === 0
@@ -395,6 +412,7 @@ class DemoScreenTour {
         await this.sleep(300);
 
         if (!state.pid) {
+          await this.spotlightOff("instant");
           await this.pointerNarrate("I can't resolve a live process for this window, so I'll move on.");
           await this.sleep(1800);
           await this.pointerDismiss();
@@ -450,25 +468,29 @@ class DemoScreenTour {
           await this.pointerDismiss();
         }
 
+        await this.spotlightOff("fade");
         await this.sleep(250);
         await this.canvasClear();
-        await this.pointerNarrate("Hmm... let me scan deeper");
-        await this.scan(state.window, 900);
-        await this.xray(state.window, 1100);
+        await this.pointerNarrate("Let me scan for other controls");
+        await this.scan(state.window, 1900);
+        await this.sleep(1000)
+        await this.pointerNarrate("Hmm...");
+        await this.sleep(1000)
+        await this.pointerNarrate("Let me scan deeper");
+        await this.xray(state.window, 2100);
         await this.sleep(250);
         await this.pointerDismiss();
 
         await this.sleep(250);
         await this.canvasClear();
         const additionalActionControls = (await this.axQuery({
-          query: "*[actions,frame,title,label]",
+          query: "Window//*[actions]",
           ndjson: true,
           pid: state.pid,
         }))
           .visible()
           .within(state.bounds)
           .unique()
-          .exclude(buttons)
           .limit(this.options.maxControls);
 
         if (additionalActionControls.isEmpty()) {
@@ -476,7 +498,12 @@ class DemoScreenTour {
           await this.sleep(1800);
           await this.pointerDismiss();
         } else {
-          await this.outline(additionalActionControls);
+          await this.outline(additionalActionControls, {
+            color: 'rgba(255, 30, 10, 1)',
+            durationMs: 5000,
+            fill: 'rgba(255, 30, 10, .5)',
+            size: 2,
+          });
           const anchor = additionalActionControls.first();
           if (anchor?.center) {
             await this.pointerMove(anchor.center.x, anchor.center.y, "purposeful");
@@ -578,10 +605,18 @@ class DemoScreenTour {
       throw new Error(`Failed to spawn canvas: ${canvasResult.stderr}`);
     }
     log(`Spawned canvas actor: ${this.options.canvasName}`);
+
+    const spotlightResult = await this.gui("actor", "spawn", "spotlight", this.options.spotlightName);
+    if (spotlightResult.exitCode !== 0) {
+      throw new Error(`Failed to spawn spotlight: ${spotlightResult.stderr}`);
+    }
+    log(`Spawned spotlight actor: ${this.options.spotlightName}`);
   }
 
   private async killActors(): Promise<void> {
     log("Cleaning up actors...");
+    await this.spotlightOff("instant").catch(() => {});
+    await this.gui("actor", "kill", this.options.spotlightName).catch(() => {});
     await this.gui("actor", "kill", this.options.pointerName).catch(() => {});
     await this.gui("actor", "kill", this.options.canvasName).catch(() => {});
     log("Actors cleaned up.");
@@ -623,6 +658,34 @@ class DemoScreenTour {
     await this.gui("actor", "run", `${this.options.canvasName}.clear`);
   }
 
+  private async spotlightRect(target: AXNode, style: SpotlightStyle = {}): Promise<void> {
+    const args = ["actor", "run", `${this.options.spotlightName}.rect`];
+    if (style.padding != null) args.push("--padding", String(style.padding));
+    if (style.blur != null) args.push("--blur", String(style.blur));
+    args.push("-");
+    await this.guiWithInput(target.rawText, ...args);
+  }
+
+  private async spotlightCirc(target: AXNode, style: SpotlightStyle = {}): Promise<void> {
+    const args = ["actor", "run", `${this.options.spotlightName}.circ`];
+    if (style.padding != null) args.push("--padding", String(style.padding));
+    if (style.blur != null) args.push("--blur", String(style.blur));
+    args.push("-");
+    await this.guiWithInput(target.rawText, ...args);
+  }
+
+  private async spotlightOn(transition: SpotlightTransition = "fade"): Promise<void> {
+    await this.gui("actor", "run", `${this.options.spotlightName}.on`, "--transition", transition);
+  }
+
+  private async spotlightOff(transition: SpotlightTransition = "fade"): Promise<void> {
+    await this.gui("actor", "run", `${this.options.spotlightName}.off`, "--transition", transition);
+  }
+
+  private async spotlightColor(color: string): Promise<void> {
+    await this.gui("actor", "run", `${this.options.spotlightName}.color`, color);
+  }
+
   private async draw(shape: string, target: AXNode, style: DrawStyle = {}): Promise<void> {
     const args = ["actor", "run", `${this.options.canvasName}.draw`, shape, "-"];
     if (style.padding != null) args.push("--padding", String(style.padding));
@@ -643,9 +706,16 @@ class DemoScreenTour {
     return String(Math.max(1, Math.round(ms * this.options.pauseScale)));
   }
 
-  private async outline(target: AXSelection): Promise<void> {
+  private async outline(target: AXSelection, style: OutlineStyle = {}): Promise<void> {
     if (target.isEmpty()) return;
-    await this.guiWithInput(target.toPayloadText(), "gfx", "outline", "-");
+    const args = ["gfx", "outline"];
+    if (style.color) args.push("--color", style.color);
+    if (style.size != null) args.push("--size", String(style.size));
+    if (style.transition) args.push("--transition", style.transition);
+    if (style.fill) args.push("--fill", style.fill);
+    if (style.durationMs != null) args.push("--duration", this.scaledEffectDuration(style.durationMs));
+    args.push("-");
+    await this.guiWithInput(target.toPayloadText(), ...args);
   }
 
   private async scan(target: AXNode | AXSelection, durationMs = 900): Promise<void> {
@@ -711,6 +781,7 @@ async function main(): Promise<void> {
     durationSeconds: DURATION_S,
     pointerName: `demo.pointer.${Date.now()}`,
     canvasName: `demo.canvas.${Date.now()}`,
+    spotlightName: `demo.spotlight.${Date.now()}`,
     env: process.env,
   });
 

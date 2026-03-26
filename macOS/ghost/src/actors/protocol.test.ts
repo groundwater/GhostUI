@@ -238,6 +238,17 @@ describe("actor protocol", () => {
       },
     });
 
+    expect(parseActorRunCLIArgs("rect", ["--padding", "8", "--blur", "12", "--speed", "240", "-"], stdinPayload)).toEqual({
+      timeoutMs: undefined,
+      action: {
+        kind: "rect",
+        rects: [{ x: 100, y: 120, width: 240, height: 180 }],
+        padding: 8,
+        blur: 12,
+        speed: 240,
+      },
+    });
+
     expect(parseActorRunCLIArgs("circ", ["--padding", "4", "--blur", "18", "-"], stdinPayload)).toEqual({
       timeoutMs: undefined,
       action: {
@@ -247,6 +258,19 @@ describe("actor protocol", () => {
         blur: 18,
       },
     });
+
+    expect(parseActorRunCLIArgs("circ", ["--padding", "4", "--blur", "18", "--speed", "180", "-"], stdinPayload)).toEqual({
+      timeoutMs: undefined,
+      action: {
+        kind: "circ",
+        rects: [{ x: 100, y: 120, width: 240, height: 180 }],
+        padding: 4,
+        blur: 18,
+        speed: 180,
+      },
+    });
+
+    expect(() => parseActorRunCLIArgs("rect", ["--speed", "0", "-"], stdinPayload)).toThrow("speed must be greater than 0");
 
     expect(parseActorRunCLIArgs("on", ["--transition", "instant"])).toEqual({
       timeoutMs: undefined,
@@ -541,6 +565,102 @@ describe("actor protocol", () => {
           color: "#ff0000",
           highlight: "#00ff00",
         },
+      },
+      timeoutMs: undefined,
+    });
+
+    expect(normalizeActorRunRequest({
+      kind: "rect",
+      rects: [{ x: 100, y: 120, width: 240, height: 180 }],
+      padding: 8,
+      blur: 12,
+    })).toEqual({
+      action: {
+        kind: "rect",
+        rects: [{ x: 100, y: 120, width: 240, height: 180 }],
+        padding: 8,
+        blur: 12,
+      },
+      timeoutMs: undefined,
+    });
+
+    expect(normalizeActorRunRequest({
+      kind: "rect",
+      rects: [{ x: 100, y: 120, width: 240, height: 180 }],
+      padding: 8,
+      blur: 12,
+      speed: 240,
+    })).toEqual({
+      action: {
+        kind: "rect",
+        rects: [{ x: 100, y: 120, width: 240, height: 180 }],
+        padding: 8,
+        blur: 12,
+        speed: 240,
+      },
+      timeoutMs: undefined,
+    });
+
+    expect(normalizeActorRunRequest({
+      kind: "circ",
+      rects: [{ x: 494, y: 25, width: 1043, height: 779 }],
+      padding: 4,
+      blur: 18,
+    })).toEqual({
+      action: {
+        kind: "circ",
+        rects: [{ x: 494, y: 25, width: 1043, height: 779 }],
+        padding: 4,
+        blur: 18,
+      },
+      timeoutMs: undefined,
+    });
+
+    expect(normalizeActorRunRequest({
+      kind: "circ",
+      rects: [{ x: 494, y: 25, width: 1043, height: 779 }],
+      padding: 4,
+      blur: 18,
+      speed: 180,
+    })).toEqual({
+      action: {
+        kind: "circ",
+        rects: [{ x: 494, y: 25, width: 1043, height: 779 }],
+        padding: 4,
+        blur: 18,
+        speed: 180,
+      },
+      timeoutMs: undefined,
+    });
+
+    expect(normalizeActorRunRequest({
+      kind: "on",
+      transition: "instant",
+    })).toEqual({
+      action: {
+        kind: "on",
+        transition: "instant",
+      },
+      timeoutMs: undefined,
+    });
+
+    expect(normalizeActorRunRequest({
+      kind: "off",
+    })).toEqual({
+      action: {
+        kind: "off",
+        transition: "fade",
+      },
+      timeoutMs: undefined,
+    });
+
+    expect(normalizeActorRunRequest({
+      kind: "color",
+      color: "rgba(0,0,0,0.35)",
+    })).toEqual({
+      action: {
+        kind: "color",
+        color: "rgba(0,0,0,0.35)",
       },
       timeoutMs: undefined,
     });

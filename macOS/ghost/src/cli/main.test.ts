@@ -78,6 +78,7 @@ import {
   parseGfxOutlineOptions,
   parseGfxSpotlightOptions,
   parseGfxMarkerOptions,
+  parseActorKillTargetsFromText,
   resolveActorRunInvocation,
 } from "./main.js";
 import { waitForDrawOverlayAttachment } from "./draw-stream.js";
@@ -1085,6 +1086,21 @@ describe("actor run usage rendering", () => {
       name: "main",
       actionName: "draw",
     });
+  });
+
+  test("parses actor kill targets from actor-list JSON and raw name lines", () => {
+    expect(parseActorKillTargetsFromText(JSON.stringify({
+      ok: true,
+      actors: [
+        { name: "pointer.main", type: "pointer" },
+        { name: "spotlight.focus", type: "spotlight" },
+      ],
+    }, null, 2))).toEqual(["pointer.main", "spotlight.focus"]);
+
+    expect(parseActorKillTargetsFromText("pointer.main\nspotlight.focus\n")).toEqual([
+      "pointer.main",
+      "spotlight.focus",
+    ]);
   });
 
   test("renders canvas-specific actor run usage when the actor type is known", () => {

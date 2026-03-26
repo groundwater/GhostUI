@@ -336,6 +336,18 @@ final class DrawOverlayService {
         case .xray:
             break // xray items are handled separately via launchXrayCapture
         case .spotlight:
+            if shape.presentation() == nil {
+                return DrawOverlayRenderState(
+                    path: finalPath,
+                    strokeColor: nil,
+                    fillColor: resolvedStyle.fillColor,
+                    lineWidth: 0,
+                    opacity: 0,
+                    shadowColor: resolvedStyle.fillColor,
+                    shadowOpacity: 0,
+                    shadowRadius: 0
+                )
+            }
             break
         case .marker:
             break

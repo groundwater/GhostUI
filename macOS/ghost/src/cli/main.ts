@@ -34,6 +34,7 @@ import { axTargetFromPoint, isAXTarget } from "../a11y/ax-target.js";
 import {
   ACTOR_CLICK_PASSTHROUGH_DELAY_MS,
   ActorApiError,
+  ACTOR_NAME_RE,
   type ActorType,
   parseActorRunCLIArgs,
   parseActorSpawnCLIArgs,
@@ -328,6 +329,78 @@ export async function resolveActorRunInvocation(
     name: baseName,
     actionName,
   };
+}
+
+function addActorKillTarget(name: string, targets: Set<string>): void {
+  const normalized = name.trim();
+  if (!normalized) {
+    return;
+  }
+  if (!ACTOR_NAME_RE.test(normalized)) {
+    throw new Error(`Invalid actor name: ${normalized}`);
+  }
+  targets.add(normalized);
+}
+
+function collectActorKillTargets(value: unknown, targets: Set<string>): void {
+  if (typeof value === "string") {
+    addActorKillTarget(value, targets);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectActorKillTargets(item, targets);
+    }
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  if (typeof value.name === "string") {
+    addActorKillTarget(value.name, targets);
+  }
+  if (Array.isArray(value.actors)) {
+    collectActorKillTargets(value.actors, targets);
+  }
+  if (Array.isArray(value.items)) {
+    collectActorKillTargets(value.items, targets);
+  }
+  if (Array.isArray(value.results)) {
+    collectActorKillTargets(value.results, targets);
+  }
+}
+
+export function parseActorKillTargetsFromText(stdinText: string): string[] {
+  const trimmed = stdinText.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const targets = new Set<string>();
+  try {
+    collectActorKillTargets(JSON.parse(trimmed) as unknown, targets);
+    return [...targets];
+  } catch {
+    // Fall back to newline-delimited names below.
+  }
+
+  for (const line of trimmed.split(/\r?\n/)) {
+    const candidate = line.trim();
+    if (!candidate) {
+      continue;
+    }
+    if ((candidate.startsWith("{") && candidate.endsWith("}")) || (candidate.startsWith("[") && candidate.endsWith("]"))) {
+      try {
+        collectActorKillTargets(JSON.parse(candidate) as unknown, targets);
+        continue;
+      } catch {
+        // Treat the line as a raw actor name below.
+      }
+    }
+    addActorKillTarget(candidate, targets);
+  }
+
+  return [...targets];
 }
 
 async function failActorRunUsageForName(name: string, detail?: string): Promise<never> {
@@ -2938,7 +3011,23 @@ async function main() {
         }
 
         if (subcommand === "kill") {
-          console.log(JSON.stringify(await killActor(name), null, 2));
+          let killTargets: string[];
+          if (name === "-") {
+            if (process.stdin.isTTY) {
+              failUsage("actor kill", "gui actor kill - expects actor names or actor list JSON on stdin.");
+            }
+            killTargets = parseActorKillTargetsFromText(await Bun.stdin.text());
+          } else {
+            killTargets = [name];
+          }
+          if (killTargets.length === 0) {
+            failUsage("actor kill", "gui actor kill - expects actor names or actor list JSON on stdin.");
+          }
+          const results = [];
+          for (const killTarget of killTargets) {
+            results.push(await killActor(killTarget));
+          }
+          console.log(JSON.stringify(results.length === 1 ? results[0] : results, null, 2));
           break;
         }
 

@@ -21,6 +21,8 @@ const SPOTLIGHT_GEOMETRY_ANIMATION_MS = 200;
 const SPOTLIGHT_FADE_ANIMATION_MS = 180;
 const SPOTLIGHT_COLOR_ANIMATION_MS = 180;
 
+type SpotlightGeometryAction = Extract<ActorAction, { kind: "rect" | "circ" }>;
+
 interface ActorState {
   name: string;
   type: ActorType;
@@ -130,6 +132,13 @@ function roundDuration(ms: number): number {
 
 function distance(a: { x: number; y: number }, b: { x: number; y: number }): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function rectContainsPoint(rect: { x: number; y: number; width: number; height: number }, point: { x: number; y: number }): boolean {
+  return point.x >= rect.x
+    && point.x < rect.x + rect.width
+    && point.y >= rect.y
+    && point.y < rect.y + rect.height;
 }
 
 export class ActorRuntime {
@@ -423,17 +432,19 @@ export class ActorRuntime {
     switch (action.kind) {
       case "rect":
       case "circ": {
+        const durationMs = this.scaleDuration(actor, this.spotlightGeometryDuration(actor.spotlight, action));
         actor.spotlight.shape = action.kind;
         actor.spotlight.rects = action.rects;
         actor.spotlight.padding = action.padding;
         actor.spotlight.blur = action.blur;
         actor.spotlight.visible = true;
-        const durationMs = this.scaleDuration(actor, SPOTLIGHT_GEOMETRY_ANIMATION_MS);
         this.postSpotlight(actor, {
           opacity: 1,
           durationMs,
         });
-        await sleep(durationMs, signal);
+        if (durationMs > 0) {
+          await sleep(durationMs, signal);
+        }
         return;
       }
       case "on": {
@@ -644,6 +655,79 @@ export class ActorRuntime {
       remove: true,
     });
     actor.spotlight.visible = false;
+  }
+
+  private spotlightGeometryDuration(
+    spotlight: SpotlightState,
+    action: SpotlightGeometryAction,
+  ): number {
+    if (action.speed === undefined) {
+      return SPOTLIGHT_GEOMETRY_ANIMATION_MS;
+    }
+
+    const previousCenter = this.spotlightGeometryCenter(spotlight.rects, spotlight.padding);
+    const nextCenter = this.spotlightGeometryCenter(action.rects, action.padding);
+    if (!previousCenter || !nextCenter) {
+      return SPOTLIGHT_GEOMETRY_ANIMATION_MS;
+    }
+
+    const movement = distance(previousCenter, nextCenter);
+    if (movement <= 0) {
+      return SPOTLIGHT_GEOMETRY_ANIMATION_MS;
+    }
+
+    const movementPx = movement * this.spotlightGeometryScale(previousCenter, nextCenter);
+    if (movementPx <= 0) {
+      return SPOTLIGHT_GEOMETRY_ANIMATION_MS;
+    }
+
+    return Math.max(1, Math.round((movementPx / action.speed) * 1000));
+  }
+
+  private spotlightGeometryScale(previousCenter: { x: number; y: number }, nextCenter: { x: number; y: number }): number {
+    const displays = this.deps.getDisplays();
+    const previousDisplay = displays.find((display) => rectContainsPoint(display.frame, previousCenter)) ?? null;
+    const nextDisplay = displays.find((display) => rectContainsPoint(display.frame, nextCenter)) ?? null;
+
+    const previousScale = previousDisplay?.scale || 1;
+    const nextScale = nextDisplay?.scale || 1;
+    if (!previousDisplay || !nextDisplay) {
+      return previousScale || nextScale || 1;
+    }
+
+    if (previousDisplay.id === nextDisplay.id) {
+      return previousScale || 1;
+    }
+
+    return (previousScale + nextScale) / 2;
+  }
+
+  private spotlightGeometryCenter(rects: CanvasBox[], padding: number): { x: number; y: number } | null {
+    if (rects.length === 0) {
+      return null;
+    }
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (const rect of rects) {
+      const inflated = this.inflateRect(rect, padding);
+      minX = Math.min(minX, inflated.x);
+      minY = Math.min(minY, inflated.y);
+      maxX = Math.max(maxX, inflated.x + inflated.width);
+      maxY = Math.max(maxY, inflated.y + inflated.height);
+    }
+
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+      return null;
+    }
+
+    return {
+      x: minX + (maxX - minX) / 2,
+      y: minY + (maxY - minY) / 2,
+    };
   }
 
   private postSpotlight(

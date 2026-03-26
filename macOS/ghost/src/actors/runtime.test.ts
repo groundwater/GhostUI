@@ -82,11 +82,11 @@ describe("actor runtime", () => {
       },
     });
 
-    expect(runtime.spawn({ type: "spotlight", name: "spotlight.focus", durationScale: 0 })).toEqual({
+    expect(runtime.spawn({ type: "spotlight", name: "spotlight.focus", durationScale: 0.01 })).toEqual({
       ok: true,
       name: "spotlight.focus",
       type: "spotlight",
-      durationScale: 0,
+      durationScale: 0.01,
     });
     expect(posted).toHaveLength(0);
 
@@ -96,6 +96,7 @@ describe("actor runtime", () => {
         rects: [{ x: 100, y: 120, width: 240, height: 180 }],
         padding: 8,
         blur: 12,
+        speed: 50,
       },
     })).resolves.toEqual({
       ok: true,
@@ -106,9 +107,24 @@ describe("actor runtime", () => {
     await expect(runtime.run("spotlight.focus", {
       action: {
         kind: "circ",
-        rects: [{ x: 110, y: 130, width: 220, height: 160 }],
-        padding: 4,
+        rects: [{ x: 100, y: 120, width: 240, height: 180 }],
+        padding: 8,
         blur: 18,
+        speed: 50,
+      },
+    })).resolves.toEqual({
+      ok: true,
+      name: "spotlight.focus",
+      completed: true,
+    });
+
+    await expect(runtime.run("spotlight.focus", {
+      action: {
+        kind: "rect",
+        rects: [{ x: 200, y: 120, width: 240, height: 180 }],
+        padding: 8,
+        blur: 18,
+        speed: 50,
       },
     })).resolves.toEqual({
       ok: true,
@@ -141,9 +157,10 @@ describe("actor runtime", () => {
     });
 
     const drawCalls = posted.filter((entry) => entry.kind === "draw");
-    expect(drawCalls).toHaveLength(5);
+    expect(drawCalls).toHaveLength(6);
     const spotlightItems = drawCalls.map((entry) => (entry.payload.items as Array<Record<string, unknown>>)[0]!);
     expect(spotlightItems.map((item) => item.id)).toEqual([
+      "spotlight.focus.spotlight",
       "spotlight.focus.spotlight",
       "spotlight.focus.spotlight",
       "spotlight.focus.spotlight",
@@ -160,47 +177,66 @@ describe("actor runtime", () => {
         opacity: 1,
         blur: 12,
       },
+      animation: { durMs: 2, ease: "easeInOut" },
     });
     expect(spotlightItems[1]).toMatchObject({
       kind: "spotlight",
       shape: "circ",
-      rects: [{ x: 106, y: 126, width: 228, height: 168 }],
+      rects: [{ x: 92, y: 112, width: 256, height: 196 }],
       style: {
         fill: "rgba(0,0,0,.5)",
         cornerRadius: 0,
         opacity: 1,
         blur: 18,
       },
+      animation: { durMs: 2, ease: "easeInOut" },
     });
     expect(spotlightItems[2]).toMatchObject({
       kind: "spotlight",
-      rects: [{ x: 106, y: 126, width: 228, height: 168 }],
+      shape: "rect",
+      rects: [{ x: 192, y: 112, width: 256, height: 196 }],
       style: {
         fill: "rgba(0,0,0,.5)",
-        cornerRadius: 0,
-        opacity: 0,
+        cornerRadius: 18,
+        opacity: 1,
         blur: 18,
       },
+      animation: { durMs: 40, ease: "easeInOut" },
     });
     expect(spotlightItems[3]).toMatchObject({
       kind: "spotlight",
-      rects: [{ x: 106, y: 126, width: 228, height: 168 }],
+      rects: [{ x: 192, y: 112, width: 256, height: 196 }],
       style: {
         fill: "rgba(0,0,0,.5)",
-        cornerRadius: 0,
-        opacity: 1,
+        cornerRadius: 18,
+        opacity: 0,
         blur: 18,
       },
+      animation: { durMs: 2, ease: "easeInOut" },
     });
     expect(spotlightItems[4]).toMatchObject({
       kind: "spotlight",
-      rects: [{ x: 106, y: 126, width: 228, height: 168 }],
+      shape: "rect",
+      rects: [{ x: 192, y: 112, width: 256, height: 196 }],
       style: {
-        fill: "rgba(0,0,0,0.35)",
-        cornerRadius: 0,
+        fill: "rgba(0,0,0,.5)",
+        cornerRadius: 18,
         opacity: 1,
         blur: 18,
       },
+      animation: { durMs: 0, ease: "easeInOut" },
+    });
+    expect(spotlightItems[5]).toMatchObject({
+      kind: "spotlight",
+      shape: "rect",
+      rects: [{ x: 192, y: 112, width: 256, height: 196 }],
+      style: {
+        fill: "rgba(0,0,0,0.35)",
+        cornerRadius: 18,
+        opacity: 1,
+        blur: 18,
+      },
+      animation: { durMs: 2, ease: "easeInOut" },
     });
 
     expect(() => runtime.kill("spotlight.focus")).not.toThrow();
@@ -213,6 +249,94 @@ describe("actor runtime", () => {
             id: "spotlight.focus.spotlight",
             kind: "spotlight",
             remove: true,
+          },
+        ],
+      },
+    });
+  });
+
+  test("uses display scale when spotlight speed crosses mixed-scale displays", async () => {
+    const posted: Array<{ kind: string; payload: Record<string, unknown> }> = [];
+    const runtime = new ActorRuntime({
+      getDisplays: () => [
+        {
+          id: 1,
+          name: "Main",
+          main: true,
+          frame: { x: 0, y: 0, width: 1440, height: 900 },
+          visibleFrame: { x: 0, y: 25, width: 1440, height: 875 },
+          scale: 1,
+          physicalSize: { width: 1440, height: 900 },
+          rotation: 0,
+        },
+        {
+          id: 2,
+          name: "Sidecar",
+          main: false,
+          frame: { x: 1440, y: 0, width: 1280, height: 800 },
+          visibleFrame: { x: 1440, y: 25, width: 1280, height: 775 },
+          scale: 2,
+          physicalSize: { width: 2560, height: 1600 },
+          rotation: 0,
+        },
+      ],
+      getMousePosition: () => ({ x: 640, y: 360 }),
+      postOverlay: (kind, payload) => {
+        posted.push({ kind, payload: JSON.parse(payload) as Record<string, unknown> });
+      },
+    });
+
+    expect(runtime.spawn({ type: "spotlight", name: "spotlight.mixed", durationScale: 0.01 })).toEqual({
+      ok: true,
+      name: "spotlight.mixed",
+      type: "spotlight",
+      durationScale: 0.01,
+    });
+
+    await expect(runtime.run("spotlight.mixed", {
+      action: {
+        kind: "rect",
+        rects: [{ x: 1370, y: 120, width: 20, height: 20 }],
+        padding: 0,
+        blur: 0,
+        speed: 100,
+      },
+    })).resolves.toEqual({
+      ok: true,
+      name: "spotlight.mixed",
+      completed: true,
+    });
+
+    await expect(runtime.run("spotlight.mixed", {
+      action: {
+        kind: "rect",
+        rects: [{ x: 1450, y: 120, width: 20, height: 20 }],
+        padding: 0,
+        blur: 0,
+        speed: 100,
+      },
+    })).resolves.toEqual({
+      ok: true,
+      name: "spotlight.mixed",
+      completed: true,
+    });
+
+    const drawCalls = posted.filter((entry) => entry.kind === "draw");
+    expect(drawCalls).toHaveLength(2);
+    expect(drawCalls[0]).toMatchObject({
+      payload: {
+        items: [
+          {
+            animation: { durMs: 2, ease: "easeInOut" },
+          },
+        ],
+      },
+    });
+    expect(drawCalls[1]).toMatchObject({
+      payload: {
+        items: [
+          {
+            animation: { durMs: 12, ease: "easeInOut" },
           },
         ],
       },
