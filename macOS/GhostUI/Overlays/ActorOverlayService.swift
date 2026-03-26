@@ -728,10 +728,13 @@ final class ActorOverlayService {
         let horizontalPadding = max(12, fontSize * 0.5)
         let verticalPadding = max(9, fontSize * 0.38)
         let maxWidth = min(max(root.bounds.width * 0.32, 260), 420)
-        let textSize = estimateTextSize(text: text, maxWidth: maxWidth, font: measureFont)
+        let wrappedText = wrapBubbleText(text, maxWidth: maxWidth, font: font)
+        let textSize = estimateTextSize(text: wrappedText, maxWidth: maxWidth, font: measureFont)
+        let textFrameWidth = max(1, min(maxWidth, textSize.width))
+        let textFrameHeight = max(ceil(fontSize * 1.2), textSize.height)
         let bubbleSize = CGSize(
-            width: textSize.width + horizontalPadding * 2,
-            height: textSize.height + verticalPadding * 2
+            width: textFrameWidth + horizontalPadding * 2,
+            height: textFrameHeight + verticalPadding * 2
         )
 
         let bubble = CALayer()
@@ -749,20 +752,21 @@ final class ActorOverlayService {
         label.foregroundColor = NSColor.white.withAlphaComponent(0.96).cgColor
         label.alignmentMode = .left
         label.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
-        label.isWrapped = true
-        label.truncationMode = .end
+        label.isWrapped = false
+        label.truncationMode = .none
 
         bubble.bounds = CGRect(origin: .zero, size: bubbleSize)
         let point = currentPosition(actor)
         bubble.position = bubblePlacement(for: bubbleSize, near: point, in: root.bounds)
-        label.frame = CGRect(x: horizontalPadding, y: verticalPadding, width: textSize.width, height: textSize.height)
+        label.frame = CGRect(x: horizontalPadding, y: verticalPadding, width: textFrameWidth, height: textFrameHeight)
+        label.string = wrappedText
         bubble.addSublayer(label)
 
         actor.container.addSublayer(bubble)
         actor.bubbleLayer = bubble
         actor.bubbleTextLayer = label
 
-        scheduleBubbleTyping(actor, label: label, text: text, duration: duration)
+        scheduleBubbleTyping(actor, label: label, text: wrappedText, duration: duration)
 
         let fadeIn = CABasicAnimation(keyPath: "opacity")
         fadeIn.fromValue = 0
@@ -991,11 +995,54 @@ final class ActorOverlayService {
             .font: font,
         ]
         let rect = NSString(string: text).boundingRect(
-            with: CGSize(width: maxWidth, height: 400),
+            with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: attributes
         )
         return CGSize(width: ceil(rect.width), height: ceil(rect.height))
+    }
+
+    private func wrapBubbleText(_ text: String, maxWidth: CGFloat, font: CTFont) -> String {
+        guard maxWidth > 0 else { return text }
+
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        let paragraphs = normalized.components(separatedBy: "\n")
+        return paragraphs.map { paragraph in
+            wrapBubbleParagraph(paragraph, maxWidth: maxWidth, font: font)
+        }.joined(separator: "\n")
+    }
+
+    private func wrapBubbleParagraph(_ paragraph: String, maxWidth: CGFloat, font: CTFont) -> String {
+        guard !paragraph.isEmpty else { return "" }
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(rawValue: kCTFontAttributeName as String): font,
+        ]
+        let attributed = NSAttributedString(string: paragraph, attributes: attributes)
+        let typesetter = CTTypesetterCreateWithAttributedString(attributed)
+        let source = paragraph as NSString
+        var lines: [String] = []
+        var start = 0
+
+        while start < attributed.length {
+            let suggested = CTTypesetterSuggestLineBreak(typesetter, start, Double(maxWidth))
+            let lineLength = max(1, min(suggested, attributed.length - start))
+            let lineRange = NSRange(location: start, length: lineLength)
+            let line = source.substring(with: lineRange).trimmingCharacters(in: .whitespaces)
+            lines.append(line)
+            start += lineLength
+
+            while start < attributed.length {
+                let scalar = source.character(at: start)
+                if scalar == 0x20 || scalar == 0x09 {
+                    start += 1
+                } else {
+                    break
+                }
+            }
+        }
+
+        return lines.joined(separator: "\n")
     }
 }
 
