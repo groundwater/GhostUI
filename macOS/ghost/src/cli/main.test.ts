@@ -19,6 +19,8 @@ import {
   buildAXHighlightDrawScriptFromText,
   buildGfxArrowDrawScriptFromText,
   buildGfxOutlineDrawScriptFromText,
+  buildGfxMarkerDrawScriptFromRect,
+  buildGfxMarkerDrawScriptFromText,
   buildGfxScanOverlayRequestFromText,
   buildGfxSpotlightDrawScriptFromText,
   buildGfxXrayDrawScriptFromText,
@@ -28,6 +30,11 @@ import {
   DEFAULT_GFX_ARROW_LENGTH,
   DEFAULT_GFX_ARROW_SIZE,
   DEFAULT_GFX_ARROW_TARGET,
+  DEFAULT_GFX_MARKER_COLOR,
+  DEFAULT_GFX_MARKER_DURATION_MS,
+  DEFAULT_GFX_MARKER_PADDING,
+  DEFAULT_GFX_MARKER_ROUGHNESS,
+  DEFAULT_GFX_MARKER_SIZE,
   DEFAULT_GFX_XRAY_DURATION_MS,
   formatVatMountOutput,
   formatVatMountsOutput,
@@ -65,6 +72,7 @@ import {
   formatVatMountError,
   parseGfxArrowOptions,
   parseGfxDuration,
+  parseGfxMarkerOptions,
 } from "./main.js";
 import {
   buildCLICompositionPayloadFromAXQueryMatch,
@@ -123,7 +131,7 @@ async function withMockedFetchSequence<T>(
     const response = responses[index] ?? new Response("unexpected fetch", { status: 500 });
     index += 1;
     return response;
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   try {
     __setDaemonAuthSecretReaderForTests(async () => null);
@@ -1462,6 +1470,31 @@ describe("ca highlight AX bridge", () => {
     expect(args).toEqual(["-"]);
   });
 
+  test("parses gfx arrow options with css colors", () => {
+    const args = ["--color", "rgba(255, 59, 48, 0.9)", "-"];
+    expect(parseGfxArrowOptions(args, "gfx arrow")).toEqual({
+      color: "rgba(255, 59, 48, 0.9)",
+      size: DEFAULT_GFX_ARROW_SIZE,
+      length: DEFAULT_GFX_ARROW_LENGTH,
+      durationMs: DEFAULT_GFX_ARROW_DURATION_MS,
+      target: DEFAULT_GFX_ARROW_TARGET,
+      from: undefined,
+    });
+    expect(args).toEqual(["-"]);
+  });
+
+  test("parses gfx marker options and strips consumed flags", () => {
+    const args = ["--padding", "8", "--size", "4", "--color", "#ff00ff", "--duration", "420", "--roughness", "0.3", "-"];
+    expect(parseGfxMarkerOptions(args, "gfx draw")).toEqual({
+      color: "#ff00ff",
+      size: 4,
+      padding: 8,
+      durationMs: 420,
+      roughness: 0.3,
+    });
+    expect(args).toEqual(["-"]);
+  });
+
   test("parses gfx arrow options with center target by default", () => {
     const args = ["-"];
     expect(parseGfxArrowOptions(args, "gfx arrow")).toEqual({
@@ -1505,6 +1538,70 @@ describe("ca highlight AX bridge", () => {
         ease: "easeInOut",
       },
     });
+  });
+
+  test("builds marker draw scripts from a literal box", () => {
+    const script = buildGfxMarkerDrawScriptFromRect(
+      { x: 100, y: 120, width: 240, height: 180 },
+      "check",
+      {
+        color: "rgba(255, 59, 48, 0.9)",
+        size: 5,
+        padding: 8,
+        durationMs: 320,
+        roughness: 0.35,
+      },
+    );
+
+    expect(script).toEqual({
+      coordinateSpace: "screen",
+      timeout: 320,
+      items: [
+        {
+          kind: "marker",
+          shape: "check",
+          rect: { x: 100, y: 120, width: 240, height: 180 },
+          style: {
+            color: "rgba(255, 59, 48, 0.9)",
+            size: 5,
+            padding: 8,
+            roughness: 0.35,
+          },
+          animation: {
+            durMs: 320,
+            ease: "easeInOut",
+          },
+        },
+      ],
+    });
+  });
+
+  test("builds marker draw scripts from stdin payloads", () => {
+    const script = buildGfxMarkerDrawScriptFromText(JSON.stringify(target), "underline", {
+      color: DEFAULT_GFX_MARKER_COLOR,
+      size: DEFAULT_GFX_MARKER_SIZE,
+      padding: DEFAULT_GFX_MARKER_PADDING,
+      durationMs: DEFAULT_GFX_MARKER_DURATION_MS,
+      roughness: DEFAULT_GFX_MARKER_ROUGHNESS,
+    });
+
+    expect(script.items).toEqual([
+      {
+        kind: "marker",
+        shape: "underline",
+        rect: { x: 100, y: 100, width: 80, height: 40 },
+        style: {
+          color: DEFAULT_GFX_MARKER_COLOR,
+          size: DEFAULT_GFX_MARKER_SIZE,
+          padding: DEFAULT_GFX_MARKER_PADDING,
+          roughness: DEFAULT_GFX_MARKER_ROUGHNESS,
+        },
+        animation: {
+          durMs: DEFAULT_GFX_MARKER_DURATION_MS,
+          ease: "easeInOut",
+        },
+      },
+    ]);
   });
 
   test("rejects VAT query payloads without bounds/frame coordinates", () => {

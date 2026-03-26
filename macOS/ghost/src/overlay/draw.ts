@@ -93,7 +93,26 @@ export interface DrawSpotlightItem {
   style?: DrawSpotlightStyle;
 }
 
-export type DrawItem = DrawRectItem | DrawLineItem | DrawXrayItem | DrawSpotlightItem;
+export type DrawMarkerShape = "rect" | "circ" | "check" | "cross" | "underline";
+
+export interface DrawMarkerStyle {
+  color: string;
+  size: number;
+  padding: number;
+  roughness: number;
+}
+
+export interface DrawMarkerItem {
+  id?: string;
+  kind: "marker";
+  remove?: boolean;
+  shape?: DrawMarkerShape;
+  rect?: DrawRect;
+  style?: DrawMarkerStyle;
+  animation?: DrawRectAnimation;
+}
+
+export type DrawItem = DrawRectItem | DrawLineItem | DrawXrayItem | DrawSpotlightItem | DrawMarkerItem;
 
 export interface DrawScript {
   timeout?: number;
@@ -104,6 +123,7 @@ export interface DrawScript {
 type DrawRectStyleInput = Partial<DrawRectStyle>;
 type DrawLineStyleInput = Partial<DrawLineStyle>;
 type DrawSpotlightStyleInput = Partial<DrawSpotlightStyle>;
+type DrawMarkerStyleInput = Partial<DrawMarkerStyle>;
 
 interface DrawRectFromInput {
   rect?: unknown;
@@ -159,6 +179,16 @@ interface DrawSpotlightItemInput {
   style?: unknown;
 }
 
+interface DrawMarkerItemInput {
+  id?: unknown;
+  kind?: unknown;
+  remove?: unknown;
+  shape?: unknown;
+  rect?: unknown;
+  style?: unknown;
+  animation?: unknown;
+}
+
 interface DrawScriptInput {
   timeout?: unknown;
   version?: unknown;
@@ -192,9 +222,12 @@ const DEFAULT_SPOTLIGHT_STYLE: DrawSpotlightStyle = {
   opacity: 1,
 };
 
-const HEX_COLOR_RE = /^#(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
+const CSS_HEX_COLOR_RE = /^#(?:[0-9A-Fa-f]{3,4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
+const CSS_RGB_COLOR_RE = /^rgb\(\s*([+-]?(?:\d+|\d*\.\d+|\.\d+))\s*,\s*([+-]?(?:\d+|\d*\.\d+|\.\d+))\s*,\s*([+-]?(?:\d+|\d*\.\d+|\.\d+))\s*\)$/;
+const CSS_RGBA_COLOR_RE = /^rgba\(\s*([+-]?(?:\d+|\d*\.\d+|\.\d+))\s*,\s*([+-]?(?:\d+|\d*\.\d+|\.\d+))\s*,\s*([+-]?(?:\d+|\d*\.\d+|\.\d+))\s*,\s*([+-]?(?:\d+|\d*\.\d+|\.\d+))\s*\)$/;
 const DRAW_ANIMATION_EASES = new Set<DrawAnimationEase>(["linear", "easeIn", "easeOut", "easeInOut"]);
 const DRAW_XRAY_DIRECTIONS = new Set<DrawXrayDirection>(["leftToRight", "rightToLeft", "topToBottom", "bottomToTop"]);
+const DRAW_MARKER_SHAPES = new Set<DrawMarkerShape>(["rect", "circ", "check", "cross", "underline"]);
 
 export class DrawScriptValidationError extends Error {
   constructor(message: string) {
@@ -245,11 +278,54 @@ function expectOpacity(value: unknown, path: string): number {
   return parsed;
 }
 
-function expectHexColor(value: unknown, path: string): string {
-  if (typeof value !== "string" || !HEX_COLOR_RE.test(value)) {
-    throw new DrawScriptValidationError(`${path} must be a hex color like #RRGGBB or #RRGGBBAA`);
+function expectRoughness(value: unknown, path: string): number {
+  const parsed = expectFiniteNumber(value, path);
+  if (parsed < 0 || parsed > 1) {
+    throw new DrawScriptValidationError(`${path} must be between 0 and 1`);
   }
-  return value;
+  return parsed;
+}
+
+function expectCssColor(value: unknown, path: string): string {
+  if (typeof value !== "string") {
+    throw new DrawScriptValidationError(`${path} must be a CSS color like #RGB[A], #RRGGBB[AA], rgb(...), or rgba(...)`);
+  }
+
+  const trimmed = value.trim();
+  if (CSS_HEX_COLOR_RE.test(trimmed)) {
+    return trimmed;
+  }
+  if (CSS_RGB_COLOR_RE.test(trimmed)) {
+    const [r, g, b] = trimmed.slice(4, -1).split(",").map((part) => Number(part.trim()));
+    if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255) {
+      throw new DrawScriptValidationError(`${path} must be a CSS color like #RGB[A], #RRGGBB[AA], rgb(...), or rgba(...)`);
+    }
+    return trimmed;
+  }
+  const rgbaMatch = trimmed.match(CSS_RGBA_COLOR_RE);
+  if (rgbaMatch) {
+    const r = Number(rgbaMatch[1]);
+    const g = Number(rgbaMatch[2]);
+    const b = Number(rgbaMatch[3]);
+    const a = Number(rgbaMatch[4]);
+    if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255 || a < 0 || a > 1) {
+      throw new DrawScriptValidationError(`${path} must be a CSS color like #RGB[A], #RRGGBB[AA], rgb(...), or rgba(...)`);
+    }
+    return trimmed;
+  }
+
+  throw new DrawScriptValidationError(`${path} must be a CSS color like #RGB[A], #RRGGBB[AA], rgb(...), or rgba(...)`);
+}
+
+export function normalizeCssColorString(value: string, path = "color"): string {
+  return expectCssColor(value, path);
+}
+
+function expectMarkerShape(value: unknown, path: string): DrawMarkerShape {
+  if (typeof value !== "string" || !DRAW_MARKER_SHAPES.has(value as DrawMarkerShape)) {
+    throw new DrawScriptValidationError(`${path} must be one of rect, circ, check, cross, underline`);
+  }
+  return value as DrawMarkerShape;
 }
 
 function expectOptionalId(value: unknown, path: string): string | undefined {
@@ -278,8 +354,8 @@ function normalizeRectStyle(value: unknown, path: string): DrawRectStyle {
   }
   const style = expectRecord(value, path) as DrawRectStyleInput;
   return {
-    stroke: style.stroke === undefined ? DEFAULT_RECT_STYLE.stroke : expectHexColor(style.stroke, `${path}.stroke`),
-    fill: style.fill === undefined ? DEFAULT_RECT_STYLE.fill : expectHexColor(style.fill, `${path}.fill`),
+    stroke: style.stroke === undefined ? DEFAULT_RECT_STYLE.stroke : expectCssColor(style.stroke, `${path}.stroke`),
+    fill: style.fill === undefined ? DEFAULT_RECT_STYLE.fill : expectCssColor(style.fill, `${path}.fill`),
     lineWidth: style.lineWidth === undefined ? DEFAULT_RECT_STYLE.lineWidth : expectPositiveNumber(style.lineWidth, `${path}.lineWidth`),
     cornerRadius: style.cornerRadius === undefined ? DEFAULT_RECT_STYLE.cornerRadius : expectNonNegativeNumber(style.cornerRadius, `${path}.cornerRadius`),
     opacity: style.opacity === undefined ? DEFAULT_RECT_STYLE.opacity : expectOpacity(style.opacity, `${path}.opacity`),
@@ -370,7 +446,7 @@ function normalizeLineStyle(value: unknown, path: string): DrawLineStyle {
   }
   const style = expectRecord(value, path) as DrawLineStyleInput;
   return {
-    stroke: style.stroke === undefined ? DEFAULT_LINE_STYLE.stroke : expectHexColor(style.stroke, `${path}.stroke`),
+    stroke: style.stroke === undefined ? DEFAULT_LINE_STYLE.stroke : expectCssColor(style.stroke, `${path}.stroke`),
     lineWidth: style.lineWidth === undefined ? DEFAULT_LINE_STYLE.lineWidth : expectPositiveNumber(style.lineWidth, `${path}.lineWidth`),
     opacity: style.opacity === undefined ? DEFAULT_LINE_STYLE.opacity : expectOpacity(style.opacity, `${path}.opacity`),
   };
@@ -380,7 +456,7 @@ function normalizeLineFrom(value: unknown, path: string): DrawLineFrom {
   const from = expectRecord(value, path) as DrawLineFromInput;
   return {
     line: normalizeLine(from.line, `${path}.line`),
-    stroke: from.stroke === undefined ? undefined : expectHexColor(from.stroke, `${path}.stroke`),
+    stroke: from.stroke === undefined ? undefined : expectCssColor(from.stroke, `${path}.stroke`),
     lineWidth: from.lineWidth === undefined ? undefined : expectPositiveNumber(from.lineWidth, `${path}.lineWidth`),
     opacity: from.opacity === undefined ? undefined : expectOpacity(from.opacity, `${path}.opacity`),
   };
@@ -476,11 +552,63 @@ function normalizeSpotlightStyle(value: unknown, path: string): DrawSpotlightSty
   }
   const style = expectRecord(value, path) as DrawSpotlightStyleInput;
   return {
-    fill: style.fill === undefined ? DEFAULT_SPOTLIGHT_STYLE.fill : expectHexColor(style.fill, `${path}.fill`),
+    fill: style.fill === undefined ? DEFAULT_SPOTLIGHT_STYLE.fill : expectCssColor(style.fill, `${path}.fill`),
     cornerRadius: style.cornerRadius === undefined
       ? DEFAULT_SPOTLIGHT_STYLE.cornerRadius
       : expectNonNegativeNumber(style.cornerRadius, `${path}.cornerRadius`),
     opacity: style.opacity === undefined ? DEFAULT_SPOTLIGHT_STYLE.opacity : expectOpacity(style.opacity, `${path}.opacity`),
+  };
+}
+
+function normalizeMarkerStyle(value: unknown, path: string): DrawMarkerStyle {
+  if (value === undefined) {
+    return {
+      color: "#FF3B30",
+      size: 4,
+      padding: 0,
+      roughness: 0.2,
+    };
+  }
+  const style = expectRecord(value, path) as DrawMarkerStyleInput;
+  return {
+    color: style.color === undefined ? "#FF3B30" : expectCssColor(style.color, `${path}.color`),
+    size: style.size === undefined ? 4 : expectPositiveNumber(style.size, `${path}.size`),
+    padding: style.padding === undefined ? 0 : expectNonNegativeNumber(style.padding, `${path}.padding`),
+    roughness: style.roughness === undefined ? 0.2 : expectRoughness(style.roughness, `${path}.roughness`),
+  };
+}
+
+function normalizeMarkerItem(value: unknown, index: number): DrawMarkerItem {
+  const item = expectRecord(value, `items[${index}]`) as DrawMarkerItemInput;
+  if (item.kind !== "marker") {
+    throw new DrawScriptValidationError(`items[${index}].kind must be "marker"`);
+  }
+
+  const id = expectOptionalId(item.id, `items[${index}].id`);
+  const remove = item.remove === undefined ? false : item.remove;
+  if (typeof remove !== "boolean") {
+    throw new DrawScriptValidationError(`items[${index}].remove must be a boolean`);
+  }
+
+  if (remove && id === undefined) {
+    throw new DrawScriptValidationError(`items[${index}].remove requires items[${index}].id`);
+  }
+
+  if (!remove && item.shape === undefined) {
+    throw new DrawScriptValidationError(`items[${index}].shape is required`);
+  }
+  if (!remove && item.rect === undefined) {
+    throw new DrawScriptValidationError(`items[${index}].rect is required`);
+  }
+
+  return {
+    id,
+    kind: "marker",
+    remove,
+    shape: remove ? undefined : expectMarkerShape(item.shape, `items[${index}].shape`),
+    rect: item.rect === undefined ? undefined : normalizeRect(item.rect, `items[${index}].rect`),
+    style: remove ? undefined : normalizeMarkerStyle(item.style, `items[${index}].style`),
+    animation: remove ? undefined : (item.animation !== undefined ? normalizeRectAnimation(item.animation, `items[${index}].animation`) : { ...DEFAULT_RECT_ANIMATION }),
   };
 }
 
@@ -539,7 +667,10 @@ function normalizeItem(value: unknown, index: number): DrawItem {
   if (item.kind === "spotlight") {
     return normalizeSpotlightItem(value, index);
   }
-  throw new DrawScriptValidationError(`items[${index}].kind must be "rect", "line", "xray", or "spotlight"`);
+  if (item.kind === "marker") {
+    return normalizeMarkerItem(value, index);
+  }
+  throw new DrawScriptValidationError(`items[${index}].kind must be "rect", "line", "xray", "spotlight", or "marker"`);
 }
 
 export function normalizeDrawScriptPayload(value: unknown): DrawScript {

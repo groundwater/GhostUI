@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DrawScriptValidationError, normalizeDrawScriptPayload, normalizeDrawScriptText, type DrawRectItem, type DrawLineItem } from "./draw.js";
+import { DrawScriptValidationError, normalizeDrawScriptPayload, normalizeDrawScriptText, type DrawRectItem, type DrawLineItem, type DrawMarkerItem } from "./draw.js";
 
 describe("draw script normalization", () => {
   test("normalizes a minimal rect payload with default style", () => {
@@ -215,13 +215,13 @@ describe("draw script normalization", () => {
     expect(() => normalizeDrawScriptPayload({})).toThrow("items must be an array");
     expect(() => normalizeDrawScriptPayload({
       items: [{ kind: "circle", rect: { x: 0, y: 0, width: 10, height: 10 } }],
-    })).toThrow('items[0].kind must be "rect", "line", "xray", or "spotlight"');
+    })).toThrow('items[0].kind must be "rect", "line", "xray", "spotlight", or "marker"');
     expect(() => normalizeDrawScriptPayload({
       items: [{ kind: "rect", rect: { x: 0, y: 0, width: 0, height: 10 } }],
     })).toThrow("items[0].rect.width must be greater than 0");
     expect(() => normalizeDrawScriptPayload({
       items: [{ kind: "rect", rect: { x: 0, y: 0, width: 10, height: 10 }, style: { stroke: "cyan" } }],
-    })).toThrow("items[0].style.stroke must be a hex color");
+    })).toThrow("items[0].style.stroke must be a CSS color like #RGB[A], #RRGGBB[AA], rgb(...), or rgba(...)");
     expect(() => normalizeDrawScriptPayload({
       items: [{ kind: "rect", rect: { x: 0, y: 0, width: 10, height: 10 }, animation: { durMs: 100 } }],
     })).toThrow("items[0].animation requires items[0].from or items[0].id");
@@ -292,7 +292,88 @@ describe("draw script spotlight normalization", () => {
     })).toThrow("items[0].rects is required");
     expect(() => normalizeDrawScriptPayload({
       items: [{ kind: "spotlight", rects: [{ x: 0, y: 0, width: 10, height: 10 }], style: { fill: "black" } }],
-    })).toThrow("items[0].style.fill must be a hex color");
+    })).toThrow("items[0].style.fill must be a CSS color like #RGB[A], #RRGGBB[AA], rgb(...), or rgba(...)");
+  });
+});
+
+describe("draw script marker normalization", () => {
+  test("normalizes a minimal marker payload with rough defaults", () => {
+    const result = normalizeDrawScriptPayload({
+      items: [
+        {
+          kind: "marker",
+          shape: "rect",
+          rect: { x: 40, y: 50, width: 300, height: 200 },
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      coordinateSpace: "screen",
+      items: [
+        {
+          kind: "marker",
+          remove: false,
+          shape: "rect",
+          rect: { x: 40, y: 50, width: 300, height: 200 },
+          style: {
+            color: "#FF3B30",
+            size: 4,
+            padding: 0,
+            roughness: 0.2,
+          },
+          animation: {
+            durMs: 250,
+            ease: "easeInOut",
+          },
+        },
+      ],
+    });
+  });
+
+  test("preserves explicit marker style and animation", () => {
+    const result = normalizeDrawScriptPayload({
+      items: [
+        {
+          kind: "marker",
+          shape: "underline",
+          rect: { x: 10, y: 20, width: 30, height: 40 },
+          style: {
+            color: "rgba(255, 59, 48, 0.9)",
+            size: 5,
+            padding: 8,
+            roughness: 0.35,
+          },
+          animation: { durMs: 500, ease: "easeOut" },
+        },
+      ],
+    });
+
+    expect((result.items[0] as DrawMarkerItem).style).toEqual({
+      color: "rgba(255, 59, 48, 0.9)",
+      size: 5,
+      padding: 8,
+      roughness: 0.35,
+    });
+    expect((result.items[0] as DrawMarkerItem).animation).toEqual({
+      durMs: 500,
+      ease: "easeOut",
+    });
+  });
+
+  test("rejects invalid marker payloads", () => {
+    expect(() => normalizeDrawScriptPayload({
+      items: [{ kind: "marker", rect: { x: 0, y: 0, width: 10, height: 10 } }],
+    })).toThrow("items[0].shape is required");
+    expect(() => normalizeDrawScriptPayload({
+      items: [{ kind: "marker", shape: "triangle", rect: { x: 0, y: 0, width: 10, height: 10 } }],
+    })).toThrow("items[0].shape must be one of rect, circ, check, cross, underline");
+    expect(() => normalizeDrawScriptPayload({
+      items: [{ kind: "marker", shape: "rect", rect: { x: 0, y: 0, width: 10, height: 10 }, style: { color: "cyan" } }],
+    })).toThrow("items[0].style.color must be a CSS color like #RGB[A], #RRGGBB[AA], rgb(...), or rgba(...)");
+    expect(() => normalizeDrawScriptPayload({
+      items: [{ kind: "marker", shape: "rect", rect: { x: 0, y: 0, width: 10, height: 10 }, style: { roughness: 1.5 } }],
+    })).toThrow("items[0].style.roughness must be between 0 and 1");
   });
 });
 
@@ -483,10 +564,10 @@ describe("draw script line normalization", () => {
     // bad stroke
     expect(() => normalizeDrawScriptPayload({
       items: [{ kind: "line", line: { from: { x: 0, y: 0 }, to: { x: 1, y: 1 } }, style: { stroke: "red" } }],
-    })).toThrow("items[0].style.stroke must be a hex color");
+    })).toThrow("items[0].style.stroke must be a CSS color like #RGB[A], #RRGGBB[AA], rgb(...), or rgba(...)");
     expect(() => normalizeDrawScriptPayload({
       items: [{ kind: "line", from: { line: { from: { x: 0, y: 0 }, to: { x: 1, y: 1 } }, stroke: "red" }, line: { from: { x: 2, y: 2 }, to: { x: 3, y: 3 } } }],
-    })).toThrow("items[0].from.stroke must be a hex color");
+    })).toThrow("items[0].from.stroke must be a CSS color like #RGB[A], #RRGGBB[AA], rgb(...), or rgba(...)");
 
     // bad lineWidth
     expect(() => normalizeDrawScriptPayload({
@@ -671,7 +752,7 @@ describe("draw script xray normalization", () => {
     // unknown kind still rejected
     expect(() => normalizeDrawScriptPayload({
       items: [{ kind: "circle", rect: { x: 0, y: 0, width: 10, height: 10 } }],
-    })).toThrow('items[0].kind must be "rect", "line", "xray", or "spotlight"');
+    })).toThrow('items[0].kind must be "rect", "line", "xray", "spotlight", or "marker"');
   });
 
   test("mixed payload with rect, line, and xray", () => {

@@ -11,7 +11,7 @@ export interface HelpTopic {
 
 const DRAW_SCRIPT_JSON_TYPE_NOTE = [
   "TypeScript payload shape:",
-  "    `DrawScript = { coordinateSpace: \"screen\"; timeout?: number; items: Array<{ kind: \"rect\" | \"line\" | \"xray\" | \"spotlight\"; ... }> }`",
+  "    `DrawScript = { coordinateSpace: \"screen\"; timeout?: number; items: Array<{ kind: \"rect\" | \"line\" | \"xray\" | \"spotlight\" | \"marker\"; ... }> }`",
 ].join("\n");
 const AX_TARGET_JSON_TYPE_NOTE = [
   "TypeScript payload shapes:",
@@ -81,7 +81,7 @@ const HELP_TOPICS: HelpTopic[] = [
       "xray capture requires Screen Recording permission.",
       "The current xray MVP is single-display.",
       "timeout still controls the attached route lifetime for the command session.",
-      "Supports rect, line, xray, and spotlight items in screen coordinates.",
+      "Supports rect, line, xray, spotlight, and marker items in screen coordinates.",
     ],
     related: ["output"],
   },
@@ -95,7 +95,8 @@ const HELP_TOPICS: HelpTopic[] = [
       "gui gfx scan [--duration <milliseconds>] -",
       "gui gfx xray [--duration <milliseconds>] -",
       "gui gfx spotlight [--duration <milliseconds>] -",
-      "gui gfx arrow [--color <hex>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--target <anchor>] [--from <x> <y>] -",
+      "gui gfx arrow [--color <css-color>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--target <anchor>] [--from <x> <y>] -",
+      "gui gfx draw <shape> <x y width height | -> [--padding <pixels>] [--size <points>] [--color <css-color>] [--duration <milliseconds>] [--roughness <0..1>]",
     ],
     examples: [
       "gui ax query --only --app Terminal '@@{Button[subrole~=DecrementPage]}' | gui gfx outline -",
@@ -103,20 +104,46 @@ const HELP_TOPICS: HelpTopic[] = [
       "gui vat query 'Window[frame]' | gui gfx xray -",
       "gui vat query 'Window[frame]' | gui gfx spotlight --duration 900 -",
       "gui vat query 'Window[frame]' | gui gfx arrow -",
+      "gui vat query 'Window[frame]' | gui gfx draw check - --padding 8 --size 4 --color 'rgba(255,59,48,0.9)'",
     ],
     notes: [
-      "Reads exactly one AX/VAT target-bearing JSON payload from stdin.",
-      "`outline`, `xray`, `spotlight`, and `arrow` share the same target contract: VAT query payloads expand over every bounds-bearing descendant in deterministic traversal order, while AX payloads render once from their single target bounds.",
+      "The stdin-driven subcommands read exactly one AX/VAT target-bearing JSON payload from stdin; `draw` also accepts a literal box.",
+      "`outline`, `xray`, `spotlight`, `arrow`, and stdin `draw` share the same target contract: VAT query payloads expand over every bounds-bearing descendant in deterministic traversal order, while AX payloads render once from their single target bounds.",
       "`scan` resolves the same AX/VAT bounds but only drives the red scan-line overlay; it does not add outline/highlight rects.",
       "`spotlight` does not outline the target. It computes the union of all resolved bounds and dims the complement outside that union.",
       "`spotlight` accepts --duration and defaults to 1200ms, matching the other non-scan/xray overlay lifetimes.",
       "`arrow` defaults to color `#FF3B30`, size `6`, length `100`, duration `400`, and target `center`. Use --target with center, topleft, topright, bottomleft, bottomright, left, top, right, or bottom to pick the anchor point on the resolved target rect. Use --from <x> <y> to override the starting point and ignore --length.",
+      "`draw` renders marker-style shapes with native-backed roughness and reveal behavior. It accepts rect, circ, check, cross, and underline. Pass literal screen coordinates as `x y width height` or stdin `-` to reuse AX/VAT resolution.",
       AX_TARGET_BEARING_JSON_TYPE_NOTE,
-      "`scan` defaults to 500ms. `xray` defaults to 650ms. `spotlight` and `outline` default to 1200ms. `arrow` defaults to 400ms.",
+      "`scan` defaults to 500ms. `xray` defaults to 650ms. `spotlight` and `outline` default to 1200ms. `arrow` defaults to 400ms. `draw` defaults to 250ms.",
       "Duplicate bounds are deduplicated before rendering so the same rect is not annotated twice.",
       "`gfx write` is intentionally not shipped.",
     ],
     related: ["ca", "output"],
+  },
+  {
+    id: "gfx draw",
+    title: "Draw marker-style shapes",
+    summary: "Render rough marker-style shapes over a literal box or a resolved AX/VAT target.",
+    aliases: [],
+    usage: [
+      "gui gfx draw rect <x y width height | -> [--padding <pixels>] [--size <points>] [--color <css-color>] [--duration <milliseconds>] [--roughness <0..1>]",
+      "gui gfx draw circ <x y width height | -> [--padding <pixels>] [--size <points>] [--color <css-color>] [--duration <milliseconds>] [--roughness <0..1>]",
+      "gui gfx draw check <x y width height | -> [--padding <pixels>] [--size <points>] [--color <css-color>] [--duration <milliseconds>] [--roughness <0..1>]",
+      "gui gfx draw cross <x y width height | -> [--padding <pixels>] [--size <points>] [--color <css-color>] [--duration <milliseconds>] [--roughness <0..1>]",
+      "gui gfx draw underline <x y width height | -> [--padding <pixels>] [--size <points>] [--color <css-color>] [--duration <milliseconds>] [--roughness <0..1>]",
+    ],
+    examples: [
+      "gui gfx draw check 100 120 240 180 --padding 8 --size 4 --color 'rgba(255,59,48,0.9)'",
+      "gui vat query 'Window[frame]' | gui gfx draw underline - --size 5 --roughness 0.3",
+    ],
+    notes: [
+      "Literal boxes are parsed as screen coordinates: x y width height.",
+      "Use `-` to read one AX/VAT target-bearing JSON payload from stdin and render the marker shape over every resolved bounds rectangle.",
+      "Colors accept #rgb, #rgba, #rrggbb, #rrggbbaa, rgb(), and rgba().",
+      "The marker path is intentionally imperfect and uses roughness plus reveal animation to look hand-drawn.",
+    ],
+    related: ["gfx", "output"],
   },
   {
     id: "print",

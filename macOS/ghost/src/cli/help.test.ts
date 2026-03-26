@@ -124,7 +124,7 @@ describe("cli help rendering", () => {
 
     expect(help).toContain("\"kind\":\"rect\"");
     expect(help).toContain("\"kind\":\"xray\"");
-    expect(help).toContain("`DrawScript = { coordinateSpace: \"screen\"; timeout?: number; items: Array<{ kind: \"rect\" | \"line\" | \"xray\" | \"spotlight\"; ... }> }`");
+    expect(help).toContain("`DrawScript = { coordinateSpace: \"screen\"; timeout?: number; items: Array<{ kind: \"rect\" | \"line\" | \"xray\" | \"spotlight\" | \"marker\"; ... }> }`");
     expect(help).toContain("\"timeout\":1200");
     expect(help).toContain("\"direction\":\"leftToRight\"");
     expect(help).toContain("\"animation\":{\"durMs\":650}");
@@ -133,7 +133,7 @@ describe("cli help rendering", () => {
     expect(help).toContain("xray capture requires Screen Recording permission");
     expect(help).toContain("current xray MVP is single-display");
     expect(help).toContain("timeout still controls the attached route lifetime");
-    expect(help).toContain("Supports rect, line, xray, and spotlight items");
+    expect(help).toContain("Supports rect, line, xray, spotlight, and marker items");
     expect(help).toContain("gui ca script -");
     expect(help).not.toContain("gui ca highlight [--timeout <ms>] -");
     expect(help).not.toContain("gui ax query --only --app Terminal '@@{Button[subrole~=DecrementPage]}' | gui ca highlight -");
@@ -148,19 +148,35 @@ describe("cli help rendering", () => {
     expect(help).toContain("gui gfx scan [--duration <milliseconds>] -");
     expect(help).toContain("gui gfx xray [--duration <milliseconds>] -");
     expect(help).toContain("gui gfx spotlight [--duration <milliseconds>] -");
-    expect(help).toContain("gui gfx arrow [--color <hex>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--target <anchor>] [--from <x> <y>] -");
+    expect(help).toContain("gui gfx arrow [--color <css-color>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--target <anchor>] [--from <x> <y>] -");
+    expect(help).toContain("gui gfx draw <shape> <x y width height | -> [--padding <pixels>] [--size <points>] [--color <css-color>] [--duration <milliseconds>] [--roughness <0..1>]");
     expect(help).toContain("share the same target contract");
+    expect(help).toContain("stdin `draw` share the same target contract");
     expect(help).toContain("only drives the red scan-line overlay");
     expect(help).toContain("dims the complement outside that union");
     expect(help).toContain("`spotlight` accepts --duration and defaults to 1200ms");
     expect(help).toContain("defaults to color `#FF3B30`, size `6`, length `100`, duration `400`, and target `center`");
     expect(help).toContain("Use --target with center, topleft, topright, bottomleft, bottomright, left, top, right, or bottom");
-    expect(help).toContain("`scan` defaults to 500ms. `xray` defaults to 650ms. `spotlight` and `outline` default to 1200ms. `arrow` defaults to 400ms.");
+    expect(help).toContain("`scan` defaults to 500ms. `xray` defaults to 650ms. `spotlight` and `outline` default to 1200ms. `arrow` defaults to 400ms. `draw` defaults to 250ms.");
     expect(help).toContain("Duplicate bounds are deduplicated");
     expect(help).toContain("`gfx write` is intentionally not shipped.");
     expect(help).not.toContain("gui gfx write");
     expect(help).not.toContain("gui gfx text");
     expect(help).not.toContain("--timeout");
+  });
+
+  test("gfx draw help documents marker shape syntax and css colors", () => {
+    const help = renderHelpTopic("gfx draw");
+
+    expect(help).toContain("gui gfx draw rect <x y width height | ->");
+    expect(help).toContain("gui gfx draw circ <x y width height | ->");
+    expect(help).toContain("gui gfx draw check <x y width height | ->");
+    expect(help).toContain("gui gfx draw cross <x y width height | ->");
+    expect(help).toContain("gui gfx draw underline <x y width height | ->");
+    expect(help).toContain("Colors accept #rgb, #rgba, #rrggbb, #rrggbbaa, rgb(), and rgba().");
+    expect(help).toContain("hand-drawn");
+    expect(help).toContain("gui gfx draw check 100 120 240 180 --padding 8 --size 4 --color 'rgba(255,59,48,0.9)'");
+    expect(help).toContain("gui vat query 'Window[frame]' | gui gfx draw underline - --size 5 --roughness 0.3");
   });
 
   test("resolves canonical help topics and rejects removed AX shorthand", () => {

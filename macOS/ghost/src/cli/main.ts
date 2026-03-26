@@ -27,8 +27,8 @@ import {
   serializeCLICompositionPayload,
 } from "./payload.js";
 import type { CLICompositionPayload } from "./payload.js";
-import { normalizeDrawScriptText } from "../overlay/draw.js";
-import type { DrawScript } from "../overlay/draw.js";
+import { normalizeCssColorString, normalizeDrawScriptText } from "../overlay/draw.js";
+import type { DrawMarkerShape, DrawScript } from "../overlay/draw.js";
 import { waitForDrawOverlayAttachment } from "./draw-stream.js";
 import { axTargetFromPoint, isAXTarget } from "../a11y/ax-target.js";
 import {
@@ -1418,6 +1418,11 @@ export const DEFAULT_GFX_ARROW_DURATION_MS = 400;
 export const DEFAULT_GFX_ARROW_COLOR = "#FF3B30";
 export const DEFAULT_GFX_ARROW_SIZE = 6;
 export const DEFAULT_GFX_ARROW_LENGTH = 100;
+export const DEFAULT_GFX_MARKER_DURATION_MS = 250;
+export const DEFAULT_GFX_MARKER_COLOR = "#FF3B30";
+export const DEFAULT_GFX_MARKER_SIZE = 4;
+export const DEFAULT_GFX_MARKER_PADDING = 0;
+export const DEFAULT_GFX_MARKER_ROUGHNESS = 0.2;
 export type GfxArrowTarget =
   | "center"
   | "topleft"
@@ -1429,6 +1434,14 @@ export type GfxArrowTarget =
   | "right"
   | "bottom";
 export const DEFAULT_GFX_ARROW_TARGET: GfxArrowTarget = "center";
+export type GfxMarkerShape = DrawMarkerShape;
+export interface GfxMarkerOptions {
+  color: string;
+  size: number;
+  padding: number;
+  durationMs: number;
+  roughness: number;
+}
 
 function normalizeHighlightRect(value: unknown): CLICompositionRect | null {
   if (typeof value === "string") {
@@ -1668,6 +1681,28 @@ function buildArrowItems(rects: CLICompositionRect[], options: GfxArrowOptions):
   return items;
 }
 
+function buildMarkerItems(
+  rects: CLICompositionRect[],
+  shape: GfxMarkerShape,
+  options: GfxMarkerOptions,
+): DrawScript["items"] {
+  return rects.map((rect) => ({
+    kind: "marker" as const,
+    shape,
+    rect,
+    style: {
+      color: options.color,
+      size: options.size,
+      padding: options.padding,
+      roughness: options.roughness,
+    },
+    animation: {
+      durMs: options.durationMs,
+      ease: "easeInOut" as const,
+    },
+  }));
+}
+
 function buildGfxDrawScript(
   rects: CLICompositionRect[],
   items: DrawScript["items"],
@@ -1681,6 +1716,14 @@ function buildGfxDrawScript(
     timeout: timeoutMs,
     items,
   };
+}
+
+function buildGfxMarkerDrawScript(
+  rects: CLICompositionRect[],
+  shape: GfxMarkerShape,
+  options: GfxMarkerOptions,
+): DrawScript {
+  return buildGfxDrawScript(rects, buildMarkerItems(rects, shape, options), options.durationMs);
 }
 
 export function buildGfxOutlineDrawScriptFromText(
@@ -1731,6 +1774,35 @@ export function buildGfxArrowDrawScriptFromText(
   return buildGfxDrawScript(rects, buildArrowItems(rects, resolvedOptions), DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
 }
 
+export function buildGfxMarkerDrawScriptFromText(
+  input: string,
+  shape: GfxMarkerShape,
+  options: Partial<GfxMarkerOptions> = {},
+): DrawScript {
+  const rects = resolveGfxRectsFromText(input, `gui gfx draw ${shape} -`);
+  return buildGfxMarkerDrawScript(rects, shape, {
+    color: options.color ?? DEFAULT_GFX_MARKER_COLOR,
+    size: options.size ?? DEFAULT_GFX_MARKER_SIZE,
+    padding: options.padding ?? DEFAULT_GFX_MARKER_PADDING,
+    durationMs: options.durationMs ?? DEFAULT_GFX_MARKER_DURATION_MS,
+    roughness: options.roughness ?? DEFAULT_GFX_MARKER_ROUGHNESS,
+  });
+}
+
+export function buildGfxMarkerDrawScriptFromRect(
+  rect: CLICompositionRect,
+  shape: GfxMarkerShape,
+  options: Partial<GfxMarkerOptions> = {},
+): DrawScript {
+  return buildGfxMarkerDrawScript([rect], shape, {
+    color: options.color ?? DEFAULT_GFX_MARKER_COLOR,
+    size: options.size ?? DEFAULT_GFX_MARKER_SIZE,
+    padding: options.padding ?? DEFAULT_GFX_MARKER_PADDING,
+    durationMs: options.durationMs ?? DEFAULT_GFX_MARKER_DURATION_MS,
+    roughness: options.roughness ?? DEFAULT_GFX_MARKER_ROUGHNESS,
+  });
+}
+
 export function buildAXHighlightDrawScriptFromText(
   input: string,
   timeoutMs = DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
@@ -1760,6 +1832,116 @@ async function runGfxScanFromText(
   await postScanOverlay(request.rects, request.durationMs);
 }
 
+function parseGfxColor(raw: string, usageTopic: string): string {
+  try {
+    return normalizeCssColorString(raw, usageTopic);
+  } catch (error) {
+    if (error instanceof Error) {
+      failUsage(usageTopic, error.message);
+    }
+    throw error;
+  }
+}
+
+function parseGfxMarkerShape(value: string | undefined, usageTopic: string): GfxMarkerShape {
+  if (
+    value === "rect"
+    || value === "circ"
+    || value === "check"
+    || value === "cross"
+    || value === "underline"
+  ) {
+    return value;
+  }
+  failUsage(usageTopic, "Choose one of rect, circ, check, cross, or underline.");
+}
+
+function parseGfxLiteralRect(argv: string[], usageTopic: string): CLICompositionRect {
+  if (argv.length < 4) {
+    failUsage(usageTopic, "gui gfx draw requires x y width height after the shape when not using stdin.");
+  }
+  const [xRaw, yRaw, widthRaw, heightRaw] = argv;
+  const x = Number(xRaw);
+  const y = Number(yRaw);
+  const width = Number(widthRaw);
+  const height = Number(heightRaw);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    failUsage(usageTopic, "gui gfx draw literal boxes require finite x y width height with positive width and height.");
+  }
+  return { x, y, width, height };
+}
+
+export function parseGfxMarkerOptions(
+  argv: string[],
+  usageTopic: string,
+): GfxMarkerOptions {
+  let color = DEFAULT_GFX_MARKER_COLOR;
+  let size = DEFAULT_GFX_MARKER_SIZE;
+  let padding = DEFAULT_GFX_MARKER_PADDING;
+  let durationMs = DEFAULT_GFX_MARKER_DURATION_MS;
+  let roughness = DEFAULT_GFX_MARKER_ROUGHNESS;
+
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (token === "--color") {
+      const raw = argv[index + 1];
+      if (!raw) {
+        failUsage(usageTopic, "--color requires a CSS color like #RGB[A], #RRGGBB[AA], rgb(...), or rgba(...).");
+      }
+      color = parseGfxColor(raw, `${usageTopic} --color`);
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+    if (token === "--size") {
+      const raw = argv[index + 1];
+      const parsed = Number(raw);
+      if (!raw || !Number.isFinite(parsed) || parsed <= 0) {
+        failUsage(usageTopic, "--size requires a positive number.");
+      }
+      size = parsed;
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+    if (token === "--padding") {
+      const raw = argv[index + 1];
+      const parsed = Number(raw);
+      if (!raw || !Number.isFinite(parsed) || parsed < 0) {
+        failUsage(usageTopic, "--padding requires a non-negative number of pixels.");
+      }
+      padding = parsed;
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+    if (token === "--duration") {
+      const raw = argv[index + 1];
+      const parsed = Number(raw);
+      if (!raw || !Number.isFinite(parsed) || parsed <= 0) {
+        failUsage(usageTopic, "--duration requires a positive number of milliseconds.");
+      }
+      durationMs = parsed;
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+    if (token === "--roughness") {
+      const raw = argv[index + 1];
+      const parsed = Number(raw);
+      if (!raw || !Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+        failUsage(usageTopic, "--roughness requires a number between 0 and 1.");
+      }
+      roughness = parsed;
+      argv.splice(index, 2);
+      index--;
+      continue;
+    }
+  }
+
+  return { color, size, padding, durationMs, roughness };
+}
+
 function parseGfxTimeout(
   argv: string[],
   usageTopic: string,
@@ -1781,8 +1963,6 @@ function parseGfxTimeout(
   }
   return timeoutMs;
 }
-
-const GFX_TEXT_COLOR_RE = /^#(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
 
 export function parseGfxDuration(
   argv: string[],
@@ -1821,10 +2001,10 @@ export function parseGfxArrowOptions(
     const token = argv[index];
     if (token === "--color") {
       const raw = argv[index + 1];
-      if (!raw || !GFX_TEXT_COLOR_RE.test(raw)) {
-        failUsage(usageTopic, "--color requires a hex color like #RRGGBB or #RRGGBBAA.");
+      if (!raw) {
+        failUsage(usageTopic, "--color requires a CSS color like #RGB[A], #RRGGBB[AA], rgb(...), or rgba(...).");
       }
-      color = raw;
+      color = parseGfxColor(raw, `${usageTopic} --color`);
       argv.splice(index, 2);
       index--;
       continue;
@@ -2223,6 +2403,31 @@ async function main() {
             const input = await readStdinText("gfx arrow");
             await attachDrawOverlay(buildGfxArrowDrawScriptFromText(input, arrowOptions));
             emitPassthroughStdout(input, process.stdout.isTTY);
+            break;
+          }
+          case "draw": {
+            const shape = parseGfxMarkerShape(gfxArgs[0], "gfx draw");
+            gfxArgs.splice(0, 1);
+
+            if (gfxArgs[0] === "-") {
+              gfxArgs.splice(0, 1);
+              const markerOptions = parseGfxMarkerOptions(gfxArgs, "gfx draw");
+              if (gfxArgs.length !== 0) {
+                failUsage("gfx draw");
+              }
+              const input = await readStdinText("gfx draw");
+              await attachDrawOverlay(buildGfxMarkerDrawScriptFromText(input, shape, markerOptions));
+              emitPassthroughStdout(input, process.stdout.isTTY);
+              break;
+            }
+
+            const rect = parseGfxLiteralRect(gfxArgs, "gfx draw");
+            gfxArgs.splice(0, 4);
+            const markerOptions = parseGfxMarkerOptions(gfxArgs, "gfx draw");
+            if (gfxArgs.length !== 0) {
+              failUsage("gfx draw");
+            }
+            await attachDrawOverlay(buildGfxMarkerDrawScriptFromRect(rect, shape, markerOptions));
             break;
           }
           case "scan": {
