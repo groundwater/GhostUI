@@ -1037,7 +1037,7 @@ describe("actor run usage rendering", () => {
   });
 });
 
-describe("ca highlight AX bridge", () => {
+describe("gfx payload bridges", () => {
   const target: AXTarget = {
     type: "ax.target",
     pid: 4321,
@@ -1236,6 +1236,42 @@ describe("ca highlight AX bridge", () => {
         },
       ],
     });
+  });
+
+  test("prefers a framed VAT descendant over a labeled ancestor without bounds", () => {
+    const tree: PlainNode = {
+      _tag: "VATRoot",
+      _children: [
+        {
+          _tag: "Codex",
+          _children: [
+            {
+              _tag: "Window",
+              title: "Codex",
+              frame: { x: 220, y: 24, width: 900, height: 720 },
+              _children: [
+                {
+                  _tag: "Button",
+                  label: "Commit",
+                  frame: { x: 894, y: 34, width: 31, height: 28 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const query = "Codex/*//@@Button#Commit";
+    const { nodes, matchCount } = filterTree(tree, parseQuery(query));
+    const payload = buildCLICompositionPayloadFromVatQueryResult(query, tree, nodes, matchCount);
+
+    expect(payload.node).toEqual({
+      _tag: "Button",
+      _displayName: "Commit",
+      _frame: { x: 894, y: 34, width: 31, height: 28 },
+    });
+    expect(payload.bounds).toEqual({ x: 894, y: 34, width: 31, height: 28 });
   });
 
   test("deduplicates duplicate VAT descendant frames", () => {

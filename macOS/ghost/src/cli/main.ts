@@ -2542,21 +2542,6 @@ async function main() {
             await attachDrawOverlay(payload);
             break;
           }
-          case "highlight": {
-            const highlightArgs = args.slice(2);
-            const timeoutMs = parseGfxTimeout(highlightArgs, "ca highlight", DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS);
-            if (highlightArgs.length !== 1 || highlightArgs[0] !== "-") {
-              failUsage("ca highlight");
-            }
-            const input = await readStdinText(`${command} highlight -`);
-            const payload = buildAXHighlightDrawScriptFromText(
-              input,
-              timeoutMs,
-            );
-            await attachDrawOverlay(payload);
-            emitPassthroughStdout(input, process.stdout.isTTY);
-            break;
-          }
           default:
             failUsage("ca");
         }
