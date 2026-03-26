@@ -81,6 +81,7 @@ test:
 test-e2e:
 	test -x "$(TEST_E2E_GUI)" || (echo "Bundled gui helper missing at $(TEST_E2E_GUI). Build GhostUI.app first."; exit 1)
 	cd macOS/ghost && GHOSTUI_ENABLE_LIVE_PIPE_TESTS=1 GHOSTUI_TEST_GUI_PATH="$(TEST_E2E_GUI)" bun test --max-concurrency=1 --timeout=15000 src/cli/pipeline.live-e2e.test.ts
+	cd macOS/ghost && GHOSTUI_ENABLE_LIVE_PIPE_TESTS=1 GHOSTUI_TEST_GUI_PATH="$(TEST_E2E_GUI)" bun test --max-concurrency=1 --timeout=15000 src/cli/actor.live-e2e.test.ts
 	cd macOS/ghost && GHOSTUI_ENABLE_LIVE_PIPE_TESTS=1 GHOSTUI_TEST_GUI_PATH="$(TEST_E2E_GUI)" bun test --max-concurrency=1 --timeout=15000 src/cli/pipeline.live-gfx-e2e.test.ts
 	cd macOS/ghost && GHOSTUI_ENABLE_LIVE_PIPE_TESTS=1 GHOSTUI_TEST_GUI_PATH="$(TEST_E2E_GUI)" bun test --max-concurrency=1 --timeout=15000 src/cli/pipeline.live-chain-e2e.test.ts
 	cd macOS/ghost && GHOSTUI_ENABLE_LIVE_PIPE_TESTS=1 GHOSTUI_TEST_GUI_PATH="$(TEST_E2E_GUI)" bun test --max-concurrency=1 --timeout=15000 src/cli/pipeline.live-window-e2e.test.ts
