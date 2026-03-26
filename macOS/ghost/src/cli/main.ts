@@ -1629,20 +1629,27 @@ function collectVatHighlightRects(
   const seen = new Set<string>();
   let firstNodeWithoutBounds: PlainNode | null = null;
   const walk = (node: PlainNode) => {
-    if (node._tag !== "VATRoot") {
-      const rect = boundsFromHighlightNode(node);
-      if (rect && rect.width > 0 && rect.height > 0) {
-        const key = `${rect.x}:${rect.y}:${rect.width}:${rect.height}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          rects.push(rect);
-        }
-      } else {
-        firstNodeWithoutBounds ??= node;
+    if (node._tag === "VATRoot") {
+      for (const child of node._children ?? []) {
+        walk(child);
       }
+      return;
     }
-    for (const child of node._children ?? []) {
-      walk(child);
+    if (node._children && node._children.length > 0) {
+      for (const child of node._children) {
+        walk(child);
+      }
+      return;
+    }
+    const rect = boundsFromHighlightNode(node);
+    if (rect && rect.width > 0 && rect.height > 0) {
+      const key = `${rect.x}:${rect.y}:${rect.width}:${rect.height}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        rects.push(rect);
+      }
+    } else {
+      firstNodeWithoutBounds ??= node;
     }
   };
   for (const node of nodes ?? []) {

@@ -1182,7 +1182,7 @@ describe("ca highlight AX bridge", () => {
     });
   });
 
-  test("prefers a framed VAT descendant over a labeled ancestor without bounds", () => {
+  test("uses only the framed VAT leaf for highlight and gfx outline payloads", () => {
     const tree: PlainNode = {
       _tag: "VATRoot",
       _children: [
@@ -1222,8 +1222,14 @@ describe("ca highlight AX bridge", () => {
       items: [
         {
           kind: "rect",
-          rect: { x: 220, y: 24, width: 900, height: 720 },
+          rect: { x: 894, y: 34, width: 31, height: 28 },
         },
+      ],
+    });
+    expect(buildGfxOutlineDrawScriptFromText(JSON.stringify(payload))).toEqual({
+      coordinateSpace: "screen",
+      timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
+      items: [
         {
           kind: "rect",
           rect: { x: 894, y: 34, width: 31, height: 28 },

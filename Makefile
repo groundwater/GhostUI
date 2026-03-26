@@ -1,4 +1,4 @@
-.PHONY: help generate release debug clean icon native test test-e2e
+.PHONY: help generate release debug clean icon native test test-e2e demo
 
 -include .env
 export
@@ -27,6 +27,7 @@ help:
 	@echo "  native    Build N-API accessibility module"
 	@echo "  test      Run the standard GhostUI TypeScript verification flow"
 	@echo "  test-e2e  Run the live gated CLI pipeline e2e matrix"
+	@echo "  demo      Run the live screen-tour demo (env: DEMO_PAUSE_SCALE, DEMO_MAX_WINDOWS, DEMO_DURATION_S)"
 	@echo "  icon      Generate AppIcon.icns from source PNG"
 	@echo "  clean     Remove build artifacts"
 	@echo ""
@@ -85,6 +86,10 @@ test-e2e:
 	cd macOS/ghost && GHOSTUI_ENABLE_LIVE_PIPE_TESTS=1 GHOSTUI_TEST_GUI_PATH="$(TEST_E2E_GUI)" bun test --max-concurrency=1 --timeout=15000 src/cli/pipeline.live-gfx-e2e.test.ts
 	cd macOS/ghost && GHOSTUI_ENABLE_LIVE_PIPE_TESTS=1 GHOSTUI_TEST_GUI_PATH="$(TEST_E2E_GUI)" bun test --max-concurrency=1 --timeout=15000 src/cli/pipeline.live-chain-e2e.test.ts
 	cd macOS/ghost && GHOSTUI_ENABLE_LIVE_PIPE_TESTS=1 GHOSTUI_TEST_GUI_PATH="$(TEST_E2E_GUI)" bun test --max-concurrency=1 --timeout=15000 src/cli/pipeline.live-window-e2e.test.ts
+
+demo:
+	test -x "$(TEST_E2E_GUI)" || (echo "Bundled gui helper missing at $(TEST_E2E_GUI). Build GhostUI.app first."; exit 1)
+	cd macOS/ghost && GHOSTUI_TEST_GUI_PATH="$(TEST_E2E_GUI)" bun run src/cli/demo-screen-tour.ts
 
 release: icon generate
 	$(XCODEBUILD) -project $(PROJECT) -scheme $(SCHEME) -configuration Release -destination 'generic/platform=macOS' -allowProvisioningUpdates -allowProvisioningDeviceRegistration -derivedDataPath $(DERIVED_DATA) build

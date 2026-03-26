@@ -722,6 +722,18 @@ final class ActorOverlayService {
     private func showBubble(_ actor: PointerActorLayer, root: CALayer, text: String, duration: CFTimeInterval) {
         guard !text.isEmpty else { return }
 
+        let fontSize: CGFloat = 24
+        let font = CTFontCreateWithName("SF Pro Text" as CFString, fontSize, nil)
+        let measureFont = NSFont.systemFont(ofSize: fontSize, weight: .medium)
+        let horizontalPadding = max(12, fontSize * 0.5)
+        let verticalPadding = max(9, fontSize * 0.38)
+        let maxWidth = min(max(root.bounds.width * 0.32, 260), 420)
+        let textSize = estimateTextSize(text: text, maxWidth: maxWidth, font: measureFont)
+        let bubbleSize = CGSize(
+            width: textSize.width + horizontalPadding * 2,
+            height: textSize.height + verticalPadding * 2
+        )
+
         let bubble = CALayer()
         bubble.backgroundColor = NSColor.black.withAlphaComponent(0.78).cgColor
         bubble.cornerRadius = 10
@@ -731,26 +743,26 @@ final class ActorOverlayService {
         bubble.shadowOffset = CGSize(width: 0, height: -2)
 
         let label = CATextLayer()
-        label.string = text
-        label.font = CTFontCreateWithName("SF Pro Text" as CFString, 12, nil)
-        label.fontSize = 12
+        label.string = ""
+        label.font = font
+        label.fontSize = fontSize
         label.foregroundColor = NSColor.white.withAlphaComponent(0.96).cgColor
         label.alignmentMode = .left
         label.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
         label.isWrapped = true
         label.truncationMode = .end
 
-        let maxWidth: CGFloat = 260
-        let textSize = estimateTextSize(text: text, maxWidth: maxWidth)
-        bubble.bounds = CGRect(x: 0, y: 0, width: textSize.width + 24, height: textSize.height + 18)
+        bubble.bounds = CGRect(origin: .zero, size: bubbleSize)
         let point = currentPosition(actor)
-        bubble.position = CGPoint(x: point.x + bubble.bounds.width / 2 + 18, y: point.y + bubble.bounds.height / 2 + 10)
-        label.frame = CGRect(x: 12, y: 9, width: textSize.width, height: textSize.height)
+        bubble.position = bubblePlacement(for: bubbleSize, near: point, in: root.bounds)
+        label.frame = CGRect(x: horizontalPadding, y: verticalPadding, width: textSize.width, height: textSize.height)
         bubble.addSublayer(label)
 
         actor.container.addSublayer(bubble)
         actor.bubbleLayer = bubble
         actor.bubbleTextLayer = label
+
+        scheduleBubbleTyping(actor, label: label, text: text, duration: duration)
 
         let fadeIn = CABasicAnimation(keyPath: "opacity")
         fadeIn.fromValue = 0
@@ -765,6 +777,67 @@ final class ActorOverlayService {
         }
         actor.cleanupItems.append(hideWork)
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0.3, duration), execute: hideWork)
+    }
+
+    private func scheduleBubbleTyping(
+        _ actor: PointerActorLayer,
+        label: CATextLayer,
+        text: String,
+        duration: CFTimeInterval
+    ) {
+        let characters = Array(text)
+        guard !characters.isEmpty else { return }
+
+        let availableReveal = max(0.18, min(max(0.22, duration * 0.72), Double(characters.count) * 0.045))
+        let stepDelay = max(0.012, availableReveal / Double(characters.count))
+
+        for index in 1...characters.count {
+            let partial = String(characters.prefix(index))
+            let reveal = DispatchWorkItem { [weak actor, weak label] in
+                guard
+                    let actor,
+                    let label,
+                    actor.bubbleTextLayer === label
+                else { return }
+                label.string = partial
+            }
+            actor.cleanupItems.append(reveal)
+            let deadline = DispatchTime.now() + stepDelay * Double(index - 1)
+            DispatchQueue.main.asyncAfter(deadline: deadline, execute: reveal)
+        }
+    }
+
+    private func bubblePlacement(for bubbleSize: CGSize, near point: CGPoint, in bounds: CGRect) -> CGPoint {
+        let edgeInset: CGFloat = 14
+        let horizontalGap: CGFloat = 18
+        let verticalGap: CGFloat = 12
+        let halfWidth = bubbleSize.width / 2
+        let halfHeight = bubbleSize.height / 2
+
+        let fitsRight = point.x + horizontalGap + bubbleSize.width <= bounds.maxX - edgeInset
+        let fitsLeft = point.x - horizontalGap - bubbleSize.width >= bounds.minX + edgeInset
+        let fitsAbove = point.y + verticalGap + bubbleSize.height <= bounds.maxY - edgeInset
+        let fitsBelow = point.y - verticalGap - bubbleSize.height >= bounds.minY + edgeInset
+
+        let centerX: CGFloat
+        if fitsRight {
+            centerX = point.x + horizontalGap + halfWidth
+        } else if fitsLeft {
+            centerX = point.x - horizontalGap - halfWidth
+        } else {
+            centerX = min(max(point.x, bounds.minX + edgeInset + halfWidth), bounds.maxX - edgeInset - halfWidth)
+        }
+
+        let centerY: CGFloat
+        if fitsAbove {
+            centerY = point.y + verticalGap + halfHeight
+        } else if fitsBelow {
+            centerY = point.y - verticalGap - halfHeight
+        } else {
+            centerY = min(max(point.y, bounds.minY + edgeInset + halfHeight), bounds.maxY - edgeInset - halfHeight)
+        }
+
+        return CGPoint(x: centerX, y: centerY)
     }
 
     private func hideBubble(_ actor: PointerActorLayer) {
@@ -960,13 +1033,18 @@ private extension ActorOverlayPayload {
     }
 
     func canvasMarkerRect(in root: CALayer, style: CanvasMarkerStyle) -> CGRect {
-        let sourceRect = markerRect?.cgRect ?? fallbackCanvasRect(in: root, style: style)
+        let sourceRect: CGRect
+        if let rect = markerRect?.cgRect {
+            sourceRect = OverlayWindowManager.shared.screenRectToView(rect)
+        } else {
+            sourceRect = fallbackCanvasRect(in: root, style: style)
+        }
         return sourceRect.insetBy(dx: -style.padding, dy: -style.padding)
     }
 
     func canvasTextFrame(in root: CALayer, textSize: CGSize, padding: CGFloat) -> CGRect {
         if let rect = markerRect?.cgRect {
-            return rect
+            return OverlayWindowManager.shared.screenRectToView(rect)
         }
 
         let point = position?.cgPoint ?? CGPoint(x: root.bounds.midX, y: root.bounds.midY)
@@ -982,7 +1060,8 @@ private extension ActorOverlayPayload {
 
     func canvasTextMaxWidth(in root: CALayer, fontSize: CGFloat) -> CGFloat {
         if let rect = markerRect?.cgRect {
-            return max(40, rect.width - 20)
+            let viewRect = OverlayWindowManager.shared.screenRectToView(rect)
+            return max(40, viewRect.width - 20)
         }
         return min(max(root.bounds.width * 0.68, fontSize * 8), 640)
     }

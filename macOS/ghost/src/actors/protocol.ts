@@ -527,7 +527,7 @@ function parseCanvasBoxesFromStdin(
   }
 
   const payload = payloads[0]!;
-  if (options.preferResolvedBounds && payload.source === "vat.query" && payload.bounds) {
+  if (payload.source === "vat.query" && payload.bounds && (options.preferResolvedBounds || payload.matchCount === 1)) {
     return [requireCLICompositionBounds(payload, usageLabel)];
   }
   if (payload.source === "vat.query" && payload.nodes) {
