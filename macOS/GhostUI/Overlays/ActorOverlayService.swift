@@ -158,7 +158,7 @@ private final class CanvasTextItemLayer {
         background.shadowRadius = 8
         background.shadowOffset = CGSize(width: 0, height: -1)
 
-        label.alignmentMode = .left
+        label.alignmentMode = .center
         label.isWrapped = true
         label.truncationMode = .end
         label.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
@@ -953,7 +953,7 @@ private extension ActorOverlayPayload {
         CanvasMarkerStyle(
             color: color.flatMap(ActorOverlayColor.parse) ?? NSColor.systemCyan.cgColor,
             size: max(0.5, CGFloat(size ?? 4)),
-            padding: max(0, CGFloat(padding ?? 8)),
+            padding: max(0, CGFloat(padding ?? 10)),
             roughness: min(max(CGFloat(roughness ?? 0.22), 0), 1),
             opacity: min(max(CGFloat(opacity ?? 1), 0), 1)
         )
@@ -1137,7 +1137,7 @@ private enum CanvasMarkerGeometry {
 
         switch shape {
         case .rect:
-            addRoughClosedPath(path, points: markerRectanglePoints(in: rect, style: style, random: &random))
+            addRoughOpenPath(path, points: markerRectanglePoints(in: rect, style: style, random: &random))
         case .circ:
             addSmoothClosedPath(path, points: markerCirclePoints(in: rect, style: style, random: &random))
         case .check:
@@ -1171,28 +1171,34 @@ private enum CanvasMarkerGeometry {
 
     private static func markerRectanglePoints(in rect: CGRect, style: CanvasMarkerStyle, random: inout StableRandom) -> [CGPoint] {
         let jitter = markerJitter(in: rect, style: style)
-        let anchorJitterX = max(rect.width * 0.05, jitter * (0.75 + style.roughness * 0.45))
-        let anchorJitterY = max(rect.height * 0.05, jitter * (0.75 + style.roughness * 0.45))
+        let anchorJitterX = min(10, max(rect.width * 0.05, jitter * (0.75 + style.roughness * 0.45)))
+        let anchorJitterY = min(10, max(rect.height * 0.05, jitter * (0.75 + style.roughness * 0.45)))
+        let gap = max(6, min(max(style.size * 2.5, 8), rect.width * 0.18))
+        let topCenterLeft = CGPoint(x: rect.midX - gap / 2, y: rect.minY)
+        let topCenterRight = CGPoint(x: rect.midX + gap / 2, y: rect.minY)
         return [
-            CGPoint(x: rect.minX + random.uniform(-anchorJitterX, anchorJitterX), y: rect.minY + random.uniform(-anchorJitterY, anchorJitterY)),
-            CGPoint(x: rect.maxX + random.uniform(-anchorJitterX, anchorJitterX), y: rect.minY + random.uniform(-anchorJitterY, anchorJitterY)),
-            CGPoint(x: rect.maxX + random.uniform(-anchorJitterX, anchorJitterX), y: rect.maxY + random.uniform(-anchorJitterY, anchorJitterY)),
-            CGPoint(x: rect.minX + random.uniform(-anchorJitterX, anchorJitterX), y: rect.maxY + random.uniform(-anchorJitterY, anchorJitterY)),
+            jitteredPoint(topCenterLeft, maxOffsetX: anchorJitterX * 0.45, maxOffsetY: anchorJitterY * 0.3, random: &random),
+            jitteredPoint(CGPoint(x: rect.maxX, y: rect.minY), maxOffsetX: anchorJitterX, maxOffsetY: anchorJitterY, random: &random),
+            jitteredPoint(CGPoint(x: rect.maxX, y: rect.maxY), maxOffsetX: anchorJitterX, maxOffsetY: anchorJitterY, random: &random),
+            jitteredPoint(CGPoint(x: rect.minX, y: rect.maxY), maxOffsetX: anchorJitterX, maxOffsetY: anchorJitterY, random: &random),
+            jitteredPoint(CGPoint(x: rect.minX, y: rect.minY), maxOffsetX: anchorJitterX, maxOffsetY: anchorJitterY, random: &random),
+            jitteredPoint(topCenterRight, maxOffsetX: anchorJitterX * 0.45, maxOffsetY: anchorJitterY * 0.3, random: &random),
         ]
     }
 
     private static func markerCirclePoints(in rect: CGRect, style: CanvasMarkerStyle, random: inout StableRandom) -> [CGPoint] {
         let jitter = markerJitter(in: rect, style: style)
         let center = CGPoint(x: rect.midX, y: rect.midY)
-        let radiusX = max(rect.width * 0.5, style.size)
-        let radiusY = max(rect.height * 0.5, style.size)
+        let circumscribedScale: CGFloat = 1.41421356237
+        let radiusX = max(rect.width * 0.5 * circumscribedScale, style.size)
+        let radiusY = max(rect.height * 0.5 * circumscribedScale, style.size)
         let pointCount = min(28, max(12, Int((max(rect.width, rect.height) / max(style.size * 1.5, 1)).rounded(.up))))
 
         var result: [CGPoint] = []
         for index in 0..<pointCount {
             let progress = CGFloat(index) / CGFloat(pointCount)
             let angle = (progress * 2 * .pi) - (.pi / 2)
-            let radialJitter = random.uniform(-jitter, jitter) * (0.4 + style.roughness * 0.6)
+            let radialJitter = random.uniform(0, jitter) * (0.3 + style.roughness * 0.5)
             result.append(
                 CGPoint(
                     x: center.x + cos(angle) * (radiusX + radialJitter),
@@ -1309,6 +1315,14 @@ private enum CanvasMarkerGeometry {
         path.closeSubpath()
     }
 
+    private static func addRoughOpenPath(_ path: CGMutablePath, points: [CGPoint]) {
+        guard points.count >= 2 else { return }
+        path.move(to: points[0])
+        for point in points.dropFirst() {
+            path.addLine(to: point)
+        }
+    }
+
     private static func addSmoothOpenPath(_ path: CGMutablePath, points: [CGPoint]) {
         guard points.count >= 2 else { return }
         path.move(to: points[0])
@@ -1326,6 +1340,18 @@ private enum CanvasMarkerGeometry {
             let cp2 = CGPoint(x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6)
             path.addCurve(to: p2, control1: cp1, control2: cp2)
         }
+    }
+
+    private static func jitteredPoint(
+        _ point: CGPoint,
+        maxOffsetX: CGFloat,
+        maxOffsetY: CGFloat,
+        random: inout StableRandom
+    ) -> CGPoint {
+        CGPoint(
+            x: point.x + random.uniform(-maxOffsetX, maxOffsetX),
+            y: point.y + random.uniform(-maxOffsetY, maxOffsetY)
+        )
     }
 }
 
@@ -1396,13 +1422,34 @@ private extension CanvasTextItemLayer {
 
         let horizontalPadding = max(10, fontSize * 0.36)
         let verticalPadding = max(8, fontSize * 0.22)
-        label.frame = container.bounds.insetBy(dx: horizontalPadding, dy: verticalPadding)
         label.string = text
         label.font = font
         label.fontSize = fontSize
         label.foregroundColor = textColor
-        label.alignmentMode = .left
+        label.alignmentMode = .center
         label.isWrapped = true
         label.truncationMode = .end
+
+        let insetBounds = container.bounds.insetBy(dx: horizontalPadding, dy: verticalPadding)
+        let availableWidth = max(insetBounds.width, 1)
+        let availableHeight = max(insetBounds.height, 1)
+        let measuredHeight = measureTextHeight(text: text, font: font, maxWidth: availableWidth)
+        let minHeight = max(fontSize * 1.15, 1)
+        let labelHeight = min(availableHeight, max(minHeight, measuredHeight))
+        let labelY = insetBounds.minY + max(0, (availableHeight - labelHeight) / 2)
+        label.frame = CGRect(x: insetBounds.minX, y: labelY, width: availableWidth, height: labelHeight)
+    }
+
+    private func measureTextHeight(text: String, font: CTFont, maxWidth: CGFloat) -> CGFloat {
+        guard maxWidth > 0 else { return ceil(CTFontGetSize(font) * 1.15) }
+        let attributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(rawValue: kCTFontAttributeName as String): font,
+        ]
+        let rect = NSString(string: text).boundingRect(
+            with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: attributes
+        )
+        return ceil(rect.height)
     }
 }

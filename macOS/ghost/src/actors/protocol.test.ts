@@ -117,6 +117,49 @@ describe("actor protocol", () => {
       point: { x: 1015.5, y: 414.5 },
       issues: [],
     });
+    const nestedBoundsVatQueryPayload = JSON.stringify({
+      type: "gui.payload",
+      version: 1,
+      source: "vat.query",
+      query: "Codex//Text",
+      tree: null,
+      nodes: [
+        {
+          _tag: "VATRoot",
+          _children: [
+            {
+              _tag: "Codex",
+              _children: [
+                {
+                  _tag: "TextArea",
+                  _frame: "(777,674,718,40)",
+                  _children: [
+                    {
+                      _tag: "TextField",
+                      _frame: "(942,804,7,0)",
+                      _children: [],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      matchCount: 1,
+      node: {
+        _tag: "TextArea",
+        _frame: "(777,674,718,40)",
+        _children: [],
+      },
+      target: null,
+      cursor: null,
+      axQueryMatch: null,
+      vatQueryPlan: null,
+      bounds: { x: 777, y: 674, width: 718, height: 40 },
+      point: { x: 1136, y: 694 },
+      issues: [],
+    });
 
     expect(parseActorSpawnCLIArgs(["pointer", "pointer.main", "--duration-scale", "0"])).toEqual({
       type: "pointer",
@@ -180,7 +223,7 @@ describe("actor protocol", () => {
         kind: "draw",
         shape: "circ",
         style: {
-          padding: 0,
+          padding: 10,
           size: 4,
           color: "#FF3B30",
         },
@@ -194,7 +237,7 @@ describe("actor protocol", () => {
         kind: "draw",
         shape: "check",
         style: {
-          padding: 0,
+          padding: 10,
           size: 4,
           color: "#FF3B30",
         },
@@ -263,6 +306,21 @@ describe("actor protocol", () => {
           highlight: undefined,
         },
         box: { x: 100, y: 120, width: 240, height: 180 },
+      },
+    });
+
+    expect(parseActorRunCLIArgs("text", ["Working", "set", "-"], nestedBoundsVatQueryPayload)).toEqual({
+      timeoutMs: undefined,
+      action: {
+        kind: "text",
+        text: "Working set",
+        style: {
+          font: "SF Pro Text",
+          size: 36,
+          color: "#FF3B30",
+          highlight: undefined,
+        },
+        box: { x: 777, y: 674, width: 718, height: 40 },
       },
     });
 

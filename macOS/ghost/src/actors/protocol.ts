@@ -512,7 +512,11 @@ function collectCanvasBoundsRects(nodes: CanvasBoundsNode[] | null | undefined):
   return { rects, firstNodeWithoutBounds };
 }
 
-function parseCanvasBoxesFromStdin(stdinText: string, usageLabel: string): CanvasBox[] {
+function parseCanvasBoxesFromStdin(
+  stdinText: string,
+  usageLabel: string,
+  options: { preferResolvedBounds?: boolean } = {},
+): CanvasBox[] {
   const payloads = parseCLICompositionPayloadStream(stdinText, usageLabel);
   if (payloads.length === 0) {
     throw new ActorApiError("invalid_args", `${usageLabel} stdin mode requires one AX/VAT target-bearing payload`);
@@ -523,6 +527,9 @@ function parseCanvasBoxesFromStdin(stdinText: string, usageLabel: string): Canva
   }
 
   const payload = payloads[0]!;
+  if (options.preferResolvedBounds && payload.source === "vat.query" && payload.bounds) {
+    return [requireCLICompositionBounds(payload, usageLabel)];
+  }
   if (payload.source === "vat.query" && payload.nodes) {
     const { rects, firstNodeWithoutBounds } = collectCanvasBoundsRects(payload.nodes as CanvasBoundsNode[]);
     if (rects.length > 0) {
@@ -721,7 +728,7 @@ export function parseActorRunCLIArgs(actionName: string, args: string[], stdinTe
           style: {
             color: expectCanvasColor(style.color, "style.color", "#FF3B30"),
             size: style.size === undefined ? 4 : expectPositiveNumber(style.size, "style.size"),
-            padding: style.padding === undefined ? 0 : expectNonNegativeNumber(style.padding, "style.padding"),
+            padding: style.padding === undefined ? 10 : expectNonNegativeNumber(style.padding, "style.padding"),
           },
           box,
           boxes: boxes && boxes.length > 1 ? boxes : undefined,
@@ -799,7 +806,7 @@ export function parseActorRunCLIArgs(actionName: string, args: string[], stdinTe
         throw new ActorApiError("invalid_args", "actor run text stdin mode cannot be combined with --box");
       }
       if (useStdin) {
-        const boxes = parseCanvasBoxesFromStdin(stdinText, "actor run text");
+        const boxes = parseCanvasBoxesFromStdin(stdinText, "actor run text", { preferResolvedBounds: true });
         if (boxes.length !== 1) {
           throw new ActorApiError(
             "invalid_args",
