@@ -204,6 +204,11 @@ const ACTOR_RUN_ACTION_NAMES = new Set([
   "scroll",
   "think",
   "narrate",
+  "rect",
+  "circ",
+  "on",
+  "off",
+  "color",
   "draw",
   "text",
   "clear",
@@ -259,6 +264,9 @@ export function renderActorRunUsage(nameHint?: string, actorType?: ActorType): s
   if (actorType === "canvas") {
     return renderCanvasActorRunUsage(nameHint);
   }
+  if (actorType === "spotlight") {
+    return renderSpotlightActorRunUsage(nameHint);
+  }
   if (nameHint === undefined) {
     return renderUsage("actor run");
   }
@@ -272,6 +280,18 @@ function renderCanvasActorRunUsage(nameHint?: string): string {
     `  gui actor run ${name}.draw <rect|circ|check|cross|underline> [--padding <pixels>] [--size <points>] [--color <css-color>] [--box <x y width height> | -]`,
     `  gui actor run ${name}.text <Text> [--font <name>] [--size <pt>] [--color <css-color>] [--highlight <css-color|none>] [--box <x y width height> | -]`,
     `  gui actor run ${name}.clear`,
+  ].join("\n");
+}
+
+function renderSpotlightActorRunUsage(nameHint?: string): string {
+  const name = nameHint ?? "<name>";
+  return [
+    "Usage:",
+    `  gui actor run ${name}.rect [--padding <pixels>] [--blur <pixels>] -`,
+    `  gui actor run ${name}.circ [--padding <pixels>] [--blur <pixels>] -`,
+    `  gui actor run ${name}.on [--transition fade|instant]`,
+    `  gui actor run ${name}.off [--transition fade|instant]`,
+    `  gui actor run ${name}.color <Color>`,
   ].join("\n");
 }
 
@@ -2935,7 +2955,7 @@ async function main() {
               await runActorMovePassthrough(name, actionArgs);
               break;
             }
-            const stdinText = actionName === "draw" || actionName === "text"
+            const stdinText = actionName === "draw" || actionName === "text" || actionName === "rect" || actionName === "circ"
               ? actionArgs.includes("-")
                 ? await readStdinText(`actor run ${actionName}`)
                 : ""

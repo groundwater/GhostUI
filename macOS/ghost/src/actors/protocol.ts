@@ -4,10 +4,12 @@ import { parseCLICompositionPayloadStream, requireCLICompositionBounds } from ".
 
 export const ACTOR_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
-export type ActorType = "pointer" | "canvas";
+export type ActorType = "pointer" | "canvas" | "spotlight";
 export type PointerMoveStyle = "purposeful" | "fast" | "slow" | "wandering";
 export type PointerButton = "left" | "right" | "middle";
 export type CanvasDrawShape = DrawMarkerShape;
+export type SpotlightShape = "rect" | "circ";
+export type SpotlightTransition = "fade" | "instant";
 export interface CanvasBox {
   x: number;
   y: number;
@@ -58,6 +60,11 @@ export type ActorAction =
   | { kind: "dismiss" }
   | { kind: "draw"; shape: CanvasDrawShape; style: CanvasDrawStyle; box?: CanvasBox; boxes?: CanvasBox[] }
   | { kind: "text"; text: string; style: CanvasTextStyle; box?: CanvasBox }
+  | { kind: "rect"; rects: CanvasBox[]; padding: number; blur: number }
+  | { kind: "circ"; rects: CanvasBox[]; padding: number; blur: number }
+  | { kind: "on"; transition: SpotlightTransition }
+  | { kind: "off"; transition: SpotlightTransition }
+  | { kind: "color"; color: string }
   | { kind: "clear" };
 
 export interface ActorRunRequest {
@@ -127,7 +134,7 @@ function expectActorName(name: unknown, label = "name"): string {
 }
 
 function expectActorType(type: unknown): ActorType {
-  if (type !== "pointer" && type !== "canvas") {
+  if (type !== "pointer" && type !== "canvas" && type !== "spotlight") {
     throw new ActorApiError("unknown_type", `Unknown actor type: ${String(type || "")}`);
   }
   return type;
@@ -374,7 +381,7 @@ export function parseActorSpawnCLIArgs(args: string[]): ActorSpawnRequest {
   const type = rest.shift();
   const name = rest.shift();
   if (!type || !name) {
-    throw new ActorApiError("invalid_args", "Usage: gui actor spawn <pointer|canvas> <name> [--duration-scale <scale>]");
+    throw new ActorApiError("invalid_args", "Usage: gui actor spawn <pointer|canvas|spotlight> <name> [--duration-scale <scale>]");
   }
 
   let durationScale = 1;
@@ -645,6 +652,79 @@ export function parseActorRunCLIArgs(actionName: string, args: string[], stdinTe
         throw new ActorApiError("invalid_args", `Unknown dismiss args: ${rest.join(" ")}`);
       }
       return { timeoutMs, action: { kind: "dismiss" } };
+    case "rect":
+    case "circ": {
+      const stdinIndex = rest.indexOf("-");
+      if (stdinIndex < 0) {
+        throw new ActorApiError("invalid_args", `${actionName} requires -`);
+      }
+      rest.splice(stdinIndex, 1);
+      const style: Record<string, unknown> = {};
+      for (let index = 0; index < rest.length; index++) {
+        const token = rest[index];
+        if (token === "--padding") {
+          style.padding = expectNonNegativeNumber(Number(requireOptionValue(rest, index, "--padding")), "--padding");
+          rest.splice(index, 2);
+          index--;
+          continue;
+        }
+        if (token === "--blur") {
+          style.blur = expectNonNegativeNumber(Number(requireOptionValue(rest, index, "--blur")), "--blur");
+          rest.splice(index, 2);
+          index--;
+          continue;
+        }
+      }
+      if (rest.length > 0) {
+        throw new ActorApiError("invalid_args", `Unknown ${actionName} args: ${rest.join(" ")}`);
+      }
+      const rects = parseCanvasBoxesFromStdin(stdinText, `actor run spotlight ${actionName}`);
+      return {
+        timeoutMs,
+        action: {
+          kind: actionName,
+          rects,
+          padding: style.padding === undefined ? 0 : expectNonNegativeNumber(style.padding, "padding"),
+          blur: style.blur === undefined ? 0 : expectNonNegativeNumber(style.blur, "blur"),
+        },
+      };
+    }
+    case "on":
+    case "off": {
+      let transition: SpotlightTransition = "fade";
+      const transitionIndex = rest.indexOf("--transition");
+      if (transitionIndex >= 0) {
+        const value = requireOptionValue(rest, transitionIndex, "--transition");
+        if (value !== "fade" && value !== "instant") {
+          throw new ActorApiError("invalid_args", "--transition must be one of fade, instant");
+        }
+        transition = value as SpotlightTransition;
+        rest.splice(transitionIndex, 2);
+      }
+      if (rest.length > 0) {
+        throw new ActorApiError("invalid_args", `Unknown ${actionName} args: ${rest.join(" ")}`);
+      }
+      return { timeoutMs, action: { kind: actionName, transition } };
+    }
+    case "color": {
+      let color = rest.shift();
+      if (color === "--color") {
+        color = rest.shift();
+      }
+      if (!color) {
+        throw new ActorApiError("invalid_args", "color requires <Color>");
+      }
+      if (rest.length > 0) {
+        throw new ActorApiError("invalid_args", `Unknown color args: ${rest.join(" ")}`);
+      }
+      return {
+        timeoutMs,
+        action: {
+          kind: "color",
+          color: normalizeCssColorString(expectString(color, "color"), "color"),
+        },
+      };
+    }
     case "draw": {
       const shape = expectCanvasDrawShape(rest.shift(), "shape");
       const stdinIndex = rest.indexOf("-");

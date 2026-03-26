@@ -87,12 +87,16 @@ export interface DrawSpotlightStyle {
   fill: string;
   cornerRadius: number;
   opacity: number;
+  blur?: number;
 }
+
+export type DrawSpotlightShape = "rect" | "circ";
 
 export interface DrawSpotlightItem {
   id?: string;
   kind: "spotlight";
   remove?: boolean;
+  shape?: DrawSpotlightShape;
   rects?: DrawRect[];
   style?: DrawSpotlightStyle;
   animation?: DrawRectAnimation;
@@ -184,6 +188,7 @@ interface DrawSpotlightItemInput {
   id?: unknown;
   kind?: unknown;
   remove?: unknown;
+  shape?: unknown;
   rects?: unknown;
   style?: unknown;
   animation?: unknown;
@@ -570,13 +575,24 @@ function normalizeSpotlightStyle(value: unknown, path: string): DrawSpotlightSty
     return { ...DEFAULT_SPOTLIGHT_STYLE };
   }
   const style = expectRecord(value, path) as DrawSpotlightStyleInput;
-  return {
+  const resolved: DrawSpotlightStyle = {
     fill: style.fill === undefined ? DEFAULT_SPOTLIGHT_STYLE.fill : expectCssColor(style.fill, `${path}.fill`),
     cornerRadius: style.cornerRadius === undefined
       ? DEFAULT_SPOTLIGHT_STYLE.cornerRadius
       : expectNonNegativeNumber(style.cornerRadius, `${path}.cornerRadius`),
     opacity: style.opacity === undefined ? DEFAULT_SPOTLIGHT_STYLE.opacity : expectOpacity(style.opacity, `${path}.opacity`),
   };
+  if (style.blur !== undefined) {
+    resolved.blur = expectNonNegativeNumber(style.blur, `${path}.blur`);
+  }
+  return resolved;
+}
+
+function expectSpotlightShape(value: unknown, path: string): DrawSpotlightShape {
+  if (value !== "rect" && value !== "circ") {
+    throw new DrawScriptValidationError(`${path} must be one of rect, circ`);
+  }
+  return value;
 }
 
 function normalizeMarkerStyle(value: unknown, path: string): DrawMarkerStyle {
@@ -667,6 +683,7 @@ function normalizeSpotlightItem(value: unknown, index: number): DrawSpotlightIte
     id,
     kind: "spotlight",
     remove,
+    shape: remove || item.shape === undefined ? undefined : expectSpotlightShape(item.shape, `items[${index}].shape`),
     rects,
     style: remove ? undefined : normalizeSpotlightStyle(item.style, `items[${index}].style`),
     animation: remove

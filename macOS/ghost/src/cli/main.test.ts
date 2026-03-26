@@ -1048,6 +1048,11 @@ describe("actor run usage rendering", () => {
     const usage = renderActorRunUsage("p");
     expect(usage).toContain("gui actor run p.move");
     expect(usage).toContain("gui actor run p.click");
+    expect(usage).toContain("gui actor run p.rect");
+    expect(usage).toContain("gui actor run p.circ");
+    expect(usage).toContain("gui actor run p.on");
+    expect(usage).toContain("gui actor run p.off");
+    expect(usage).toContain("gui actor run p.color");
     expect(usage).toContain("gui actor run p.draw");
     expect(usage).toContain("gui actor run p.text");
     expect(usage).toContain("gui actor run p.clear");
@@ -1072,6 +1077,10 @@ describe("actor run usage rendering", () => {
       name: "main",
       actionName: "clear",
     });
+    await expect(resolveActorRunInvocation("main.rect", ["-"], undefined)).resolves.toEqual({
+      name: "main",
+      actionName: "rect",
+    });
     await expect(resolveActorRunInvocation("main.draw", ["circ", "-"], undefined)).resolves.toEqual({
       name: "main",
       actionName: "draw",
@@ -1084,6 +1093,16 @@ describe("actor run usage rendering", () => {
     expect(usage).toContain("gui actor run canvas.notes.text <Text> [--font <name>] [--size <pt>] [--color <css-color>] [--highlight <css-color|none>] [--box <x y width height> | -]");
     expect(usage).toContain("gui actor run canvas.notes.clear");
     expect(usage).not.toContain("gui actor run canvas.notes.move");
+  });
+
+  test("renders spotlight-specific actor run usage when the actor type is known", () => {
+    const usage = renderActorRunUsage("spotlight.focus", "spotlight");
+    expect(usage).toContain("gui actor run spotlight.focus.rect [--padding <pixels>] [--blur <pixels>] -");
+    expect(usage).toContain("gui actor run spotlight.focus.circ [--padding <pixels>] [--blur <pixels>] -");
+    expect(usage).toContain("gui actor run spotlight.focus.on [--transition fade|instant]");
+    expect(usage).toContain("gui actor run spotlight.focus.off [--transition fade|instant]");
+    expect(usage).toContain("gui actor run spotlight.focus.color <Color>");
+    expect(usage).not.toContain("gui actor run spotlight.focus.draw");
   });
 });
 

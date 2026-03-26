@@ -146,6 +146,7 @@ export function makeAXPayload(mode: AXPayloadMode): { payload: CLICompositionPay
           target: makeAXTargetPayload({ bounds: undefined }),
         },
         vatQueryPlan: null,
+        rectUnion: null,
         bounds: null,
         point: { x: 140, y: 120 },
         issues: [],

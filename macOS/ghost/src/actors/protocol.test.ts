@@ -171,6 +171,11 @@ describe("actor protocol", () => {
       name: "canvas.notes",
       durationScale: 1,
     });
+    expect(parseActorSpawnCLIArgs(["spotlight", "spotlight.focus"])).toEqual({
+      type: "spotlight",
+      name: "spotlight.focus",
+      durationScale: 1,
+    });
 
     expect(parseActorRunCLIArgs("move", ["--to", "840", "420", "--style", "wandering", "--timeout", "5000"])).toEqual({
       timeoutMs: 5000,
@@ -221,6 +226,50 @@ describe("actor protocol", () => {
         text: "Heads up",
       },
       timeoutMs: undefined,
+    });
+
+    expect(parseActorRunCLIArgs("rect", ["--padding", "8", "--blur", "12", "-"], stdinPayload)).toEqual({
+      timeoutMs: undefined,
+      action: {
+        kind: "rect",
+        rects: [{ x: 100, y: 120, width: 240, height: 180 }],
+        padding: 8,
+        blur: 12,
+      },
+    });
+
+    expect(parseActorRunCLIArgs("circ", ["--padding", "4", "--blur", "18", "-"], stdinPayload)).toEqual({
+      timeoutMs: undefined,
+      action: {
+        kind: "circ",
+        rects: [{ x: 100, y: 120, width: 240, height: 180 }],
+        padding: 4,
+        blur: 18,
+      },
+    });
+
+    expect(parseActorRunCLIArgs("on", ["--transition", "instant"])).toEqual({
+      timeoutMs: undefined,
+      action: {
+        kind: "on",
+        transition: "instant",
+      },
+    });
+
+    expect(parseActorRunCLIArgs("off", [])).toEqual({
+      timeoutMs: undefined,
+      action: {
+        kind: "off",
+        transition: "fade",
+      },
+    });
+
+    expect(parseActorRunCLIArgs("color", ["rgba(0,0,0,0.35)"])).toEqual({
+      timeoutMs: undefined,
+      action: {
+        kind: "color",
+        color: "rgba(0,0,0,0.35)",
+      },
     });
 
     expect(parseActorRunCLIArgs("dismiss", [])).toEqual({
@@ -523,6 +572,24 @@ describe("actor protocol", () => {
   });
 
   test("rejects bad inputs with typed actor errors", () => {
+    const stdinPayload = JSON.stringify({
+      type: "gui.payload",
+      version: 1,
+      source: "vat.query",
+      query: "Window[frame]",
+      tree: null,
+      nodes: null,
+      matchCount: null,
+      node: null,
+      target: null,
+      cursor: null,
+      axQueryMatch: null,
+      vatQueryPlan: null,
+      bounds: null,
+      rectUnion: null,
+      point: null,
+      issues: [],
+    });
     expect(() => parseActorRunCLIArgs("scroll", ["--dx", "0"])).toThrow(ActorApiError);
     expect(() => parseActorRunCLIArgs("move", ["--to", "10", "20", "--style", "teleport"])).toThrow(
       "--style must be one of purposeful, fast, slow, wandering",
@@ -539,6 +606,10 @@ describe("actor protocol", () => {
     expect(() => parseActorRunCLIArgs("draw", ["check", "--box", "100", "120", "0", "180"])).toThrow(
       "--box requires finite x y width height with positive width and height",
     );
+    expect(() => parseActorRunCLIArgs("rect", ["--padding", "8"], stdinPayload)).toThrow("rect requires -");
+    expect(() => parseActorRunCLIArgs("circ", ["-", "--blur", "-1"], stdinPayload)).toThrow("--blur must be greater than or equal to 0");
+    expect(() => parseActorRunCLIArgs("on", ["--transition", "later"])).toThrow("--transition must be one of fade, instant");
+    expect(() => parseActorRunCLIArgs("color", [])).toThrow("color requires <Color>");
     expect(() => parseActorRunCLIArgs(
       "draw",
       ["check", "-", "--box", "100", "120", "240", "180"],

@@ -12,7 +12,14 @@ import {
   type CanvasDrawStyle,
   type CanvasDrawShape,
   type CanvasTextStyle,
+  type SpotlightShape,
 } from "./protocol.js";
+import type { DrawScript } from "../overlay/draw.js";
+
+const DEFAULT_SPOTLIGHT_COLOR = "rgba(0,0,0,.5)";
+const SPOTLIGHT_GEOMETRY_ANIMATION_MS = 200;
+const SPOTLIGHT_FADE_ANIMATION_MS = 180;
+const SPOTLIGHT_COLOR_ANIMATION_MS = 180;
 
 interface ActorState {
   name: string;
@@ -22,6 +29,7 @@ interface ActorState {
   hidden: boolean;
   activeRun?: { controller: AbortController };
   canvas?: CanvasState;
+  spotlight?: SpotlightState;
 }
 
 interface CanvasState {
@@ -41,6 +49,15 @@ interface CanvasTextItemState {
   id: string;
   text: string;
   style: CanvasTextStyle;
+}
+
+interface SpotlightState {
+  shape: SpotlightShape;
+  rects: CanvasBox[];
+  color: string;
+  padding: number;
+  blur: number;
+  visible: boolean;
 }
 
 interface ActorOverlayCommand {
@@ -143,12 +160,22 @@ export class ActorRuntime {
       type: request.type,
       durationScale: request.durationScale,
       position,
-      hidden: false,
+      hidden: request.type === "spotlight",
       canvas: request.type === "canvas"
         ? {
             nextItemIndex: 0,
             drawItems: [],
             textItems: [],
+          }
+        : undefined,
+      spotlight: request.type === "spotlight"
+        ? {
+            shape: "rect",
+            rects: [],
+            color: DEFAULT_SPOTLIGHT_COLOR,
+            padding: 0,
+            blur: 0,
+            visible: false,
           }
         : undefined,
     };
@@ -161,7 +188,7 @@ export class ActorRuntime {
         position,
         durationMs: this.scaleDuration(actor, 180),
       });
-    } else {
+    } else if (actor.type === "canvas") {
       this.post({
         op: "spawn",
         name: actor.name,
@@ -186,6 +213,8 @@ export class ActorRuntime {
     actor.activeRun?.controller.abort(new ActorApiError("run_canceled", `Run canceled for actor '${name}'`));
     if (actor.type === "pointer") {
       this.post({ op: "kill", name });
+    } else if (actor.type === "spotlight") {
+      this.clearSpotlight(actor);
     } else {
       this.clearCanvas(actor);
       this.post({ op: "kill", name, type: "canvas" });
@@ -241,6 +270,19 @@ export class ActorRuntime {
       }
     }
 
+    if (actor.type === "spotlight") {
+      switch (action.kind) {
+        case "rect":
+        case "circ":
+        case "on":
+        case "off":
+        case "color":
+          return;
+        default:
+          throw new ActorApiError("unknown_action", `Unknown action: ${action.kind}`);
+      }
+    }
+
     const space = makeActorDisplaySpace(this.deps.getDisplays());
     switch (action.kind) {
       case "move":
@@ -277,6 +319,11 @@ export class ActorRuntime {
   private async execute(actor: ActorState, action: ActorAction, signal: AbortSignal): Promise<void> {
     if (actor.type === "canvas") {
       await this.executeCanvas(actor, action);
+      return;
+    }
+
+    if (actor.type === "spotlight") {
+      await this.executeSpotlight(actor, action, signal);
       return;
     }
 
@@ -364,6 +411,77 @@ export class ActorRuntime {
       case "draw":
       case "text":
       case "clear":
+        throw new ActorApiError("unknown_action", `Unknown action: ${action.kind}`);
+    }
+  }
+
+  private async executeSpotlight(actor: ActorState, action: ActorAction, signal: AbortSignal): Promise<void> {
+    if (!actor.spotlight) {
+      throw new ActorApiError("actor_not_found", `No spotlight state for actor '${actor.name}'`);
+    }
+
+    switch (action.kind) {
+      case "rect":
+      case "circ": {
+        actor.spotlight.shape = action.kind;
+        actor.spotlight.rects = action.rects;
+        actor.spotlight.padding = action.padding;
+        actor.spotlight.blur = action.blur;
+        actor.spotlight.visible = true;
+        const durationMs = this.scaleDuration(actor, SPOTLIGHT_GEOMETRY_ANIMATION_MS);
+        this.postSpotlight(actor, {
+          opacity: 1,
+          durationMs,
+        });
+        await sleep(durationMs, signal);
+        return;
+      }
+      case "on": {
+        actor.spotlight.visible = true;
+        if (actor.spotlight.rects.length === 0) {
+          return;
+        }
+        const durationMs = this.scaleDuration(actor, action.transition === "instant" ? 0 : SPOTLIGHT_FADE_ANIMATION_MS);
+        this.postSpotlight(actor, {
+          opacity: 1,
+          durationMs,
+        });
+        if (durationMs > 0) {
+          await sleep(durationMs, signal);
+        }
+        return;
+      }
+      case "off": {
+        actor.spotlight.visible = false;
+        if (actor.spotlight.rects.length === 0) {
+          return;
+        }
+        const durationMs = this.scaleDuration(actor, action.transition === "instant" ? 0 : SPOTLIGHT_FADE_ANIMATION_MS);
+        this.postSpotlight(actor, {
+          opacity: 0,
+          durationMs,
+        });
+        if (durationMs > 0) {
+          await sleep(durationMs, signal);
+        }
+        return;
+      }
+      case "color": {
+        actor.spotlight.color = action.color;
+        if (actor.spotlight.rects.length === 0) {
+          return;
+        }
+        const durationMs = this.scaleDuration(actor, SPOTLIGHT_COLOR_ANIMATION_MS);
+        this.postSpotlight(actor, {
+          opacity: actor.spotlight.visible ? 1 : 0,
+          durationMs,
+        });
+        if (actor.spotlight.visible) {
+          await sleep(durationMs, signal);
+        }
+        return;
+      }
+      default:
         throw new ActorApiError("unknown_action", `Unknown action: ${action.kind}`);
     }
   }
@@ -508,6 +626,82 @@ export class ActorRuntime {
 
   private narrateDuration(actor: ActorState, text: string): number {
     return this.scaleDuration(actor, clamp(900 + text.length * 35, 1200, 4200));
+  }
+
+  private clearSpotlight(actor: ActorState): void {
+    if (!actor.spotlight) {
+      return;
+    }
+
+    if (actor.spotlight.rects.length === 0) {
+      actor.spotlight.visible = false;
+      return;
+    }
+
+    this.postSpotlight(actor, {
+      opacity: 0,
+      durationMs: 0,
+      remove: true,
+    });
+    actor.spotlight.visible = false;
+  }
+
+  private postSpotlight(
+    actor: ActorState,
+    options: {
+      opacity: number;
+      durationMs: number;
+      remove?: boolean;
+    },
+  ): void {
+    const spotlight = actor.spotlight;
+    if (!spotlight) {
+      return;
+    }
+
+    const rects = spotlight.rects.map((rect) => this.inflateRect(rect, spotlight.padding));
+    const item = options.remove
+      ? {
+          id: `${actor.name}.spotlight`,
+          kind: "spotlight" as const,
+          remove: true,
+        }
+      : {
+          id: `${actor.name}.spotlight`,
+          kind: "spotlight" as const,
+          shape: spotlight.shape,
+          rects,
+          style: {
+            fill: spotlight.color,
+            cornerRadius: spotlight.shape === "circ" ? 0 : 18,
+            opacity: options.opacity,
+            blur: spotlight.blur > 0 ? spotlight.blur : undefined,
+          },
+          animation: {
+            durMs: options.durationMs,
+            ease: "easeInOut" as const,
+          },
+        };
+
+    const script: DrawScript = {
+      coordinateSpace: "screen",
+      items: [item],
+    };
+
+    this.deps.postOverlay("draw", JSON.stringify(script));
+  }
+
+  private inflateRect(rect: CanvasBox, padding: number): CanvasBox {
+    if (padding <= 0) {
+      return rect;
+    }
+
+    return {
+      x: rect.x - padding,
+      y: rect.y - padding,
+      width: rect.width + (padding * 2),
+      height: rect.height + (padding * 2),
+    };
   }
 
   private nextCanvasDrawItem(

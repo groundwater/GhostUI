@@ -724,13 +724,14 @@ final class ActorOverlayService {
 
         let fontSize: CGFloat = 24
         let font = CTFontCreateWithName("SF Pro Text" as CFString, fontSize, nil)
-        let measureFont = NSFont.systemFont(ofSize: fontSize, weight: .medium)
+        let measureFont = NSFont(name: CTFontCopyPostScriptName(font) as String, size: fontSize)
+            ?? NSFont.systemFont(ofSize: fontSize, weight: .medium)
         let horizontalPadding = max(12, fontSize * 0.5)
         let verticalPadding = max(9, fontSize * 0.38)
         let maxWidth = min(max(root.bounds.width * 0.32, 260), 420)
         let wrappedText = wrapBubbleText(text, maxWidth: maxWidth, font: font)
         let textSize = estimateTextSize(text: wrappedText, maxWidth: maxWidth, font: measureFont)
-        let textFrameWidth = max(1, min(maxWidth, textSize.width))
+        let textFrameWidth = max(1, min(maxWidth + 4, textSize.width + 4))
         let textFrameHeight = max(ceil(fontSize * 1.2), textSize.height)
         let bubbleSize = CGSize(
             width: textFrameWidth + horizontalPadding * 2,

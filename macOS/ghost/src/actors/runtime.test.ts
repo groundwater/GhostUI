@@ -72,6 +72,153 @@ describe("actor runtime", () => {
     expect(posted.map((payload) => JSON.parse(payload).op)).toEqual(["spawn", "kill"]);
   });
 
+  test("retains spotlight geometry and animates successive rect/circ updates", async () => {
+    const posted: Array<{ kind: string; payload: Record<string, unknown> }> = [];
+    const runtime = new ActorRuntime({
+      getDisplays: () => makeDisplays(),
+      getMousePosition: () => ({ x: 640, y: 360 }),
+      postOverlay: (kind, payload) => {
+        posted.push({ kind, payload: JSON.parse(payload) as Record<string, unknown> });
+      },
+    });
+
+    expect(runtime.spawn({ type: "spotlight", name: "spotlight.focus", durationScale: 0 })).toEqual({
+      ok: true,
+      name: "spotlight.focus",
+      type: "spotlight",
+      durationScale: 0,
+    });
+    expect(posted).toHaveLength(0);
+
+    await expect(runtime.run("spotlight.focus", {
+      action: {
+        kind: "rect",
+        rects: [{ x: 100, y: 120, width: 240, height: 180 }],
+        padding: 8,
+        blur: 12,
+      },
+    })).resolves.toEqual({
+      ok: true,
+      name: "spotlight.focus",
+      completed: true,
+    });
+
+    await expect(runtime.run("spotlight.focus", {
+      action: {
+        kind: "circ",
+        rects: [{ x: 110, y: 130, width: 220, height: 160 }],
+        padding: 4,
+        blur: 18,
+      },
+    })).resolves.toEqual({
+      ok: true,
+      name: "spotlight.focus",
+      completed: true,
+    });
+
+    await expect(runtime.run("spotlight.focus", {
+      action: { kind: "off", transition: "fade" },
+    })).resolves.toEqual({
+      ok: true,
+      name: "spotlight.focus",
+      completed: true,
+    });
+
+    await expect(runtime.run("spotlight.focus", {
+      action: { kind: "on", transition: "instant" },
+    })).resolves.toEqual({
+      ok: true,
+      name: "spotlight.focus",
+      completed: true,
+    });
+
+    await expect(runtime.run("spotlight.focus", {
+      action: { kind: "color", color: "rgba(0,0,0,0.35)" },
+    })).resolves.toEqual({
+      ok: true,
+      name: "spotlight.focus",
+      completed: true,
+    });
+
+    const drawCalls = posted.filter((entry) => entry.kind === "draw");
+    expect(drawCalls).toHaveLength(5);
+    const spotlightItems = drawCalls.map((entry) => (entry.payload.items as Array<Record<string, unknown>>)[0]!);
+    expect(spotlightItems.map((item) => item.id)).toEqual([
+      "spotlight.focus.spotlight",
+      "spotlight.focus.spotlight",
+      "spotlight.focus.spotlight",
+      "spotlight.focus.spotlight",
+      "spotlight.focus.spotlight",
+    ]);
+    expect(spotlightItems[0]).toMatchObject({
+      kind: "spotlight",
+      shape: "rect",
+      rects: [{ x: 92, y: 112, width: 256, height: 196 }],
+      style: {
+        fill: "rgba(0,0,0,.5)",
+        cornerRadius: 18,
+        opacity: 1,
+        blur: 12,
+      },
+    });
+    expect(spotlightItems[1]).toMatchObject({
+      kind: "spotlight",
+      shape: "circ",
+      rects: [{ x: 106, y: 126, width: 228, height: 168 }],
+      style: {
+        fill: "rgba(0,0,0,.5)",
+        cornerRadius: 0,
+        opacity: 1,
+        blur: 18,
+      },
+    });
+    expect(spotlightItems[2]).toMatchObject({
+      kind: "spotlight",
+      rects: [{ x: 106, y: 126, width: 228, height: 168 }],
+      style: {
+        fill: "rgba(0,0,0,.5)",
+        cornerRadius: 0,
+        opacity: 0,
+        blur: 18,
+      },
+    });
+    expect(spotlightItems[3]).toMatchObject({
+      kind: "spotlight",
+      rects: [{ x: 106, y: 126, width: 228, height: 168 }],
+      style: {
+        fill: "rgba(0,0,0,.5)",
+        cornerRadius: 0,
+        opacity: 1,
+        blur: 18,
+      },
+    });
+    expect(spotlightItems[4]).toMatchObject({
+      kind: "spotlight",
+      rects: [{ x: 106, y: 126, width: 228, height: 168 }],
+      style: {
+        fill: "rgba(0,0,0,0.35)",
+        cornerRadius: 0,
+        opacity: 1,
+        blur: 18,
+      },
+    });
+
+    expect(() => runtime.kill("spotlight.focus")).not.toThrow();
+    expect(posted.at(-1)).toMatchObject({
+      kind: "draw",
+      payload: {
+        coordinateSpace: "screen",
+        items: [
+          {
+            id: "spotlight.focus.spotlight",
+            kind: "spotlight",
+            remove: true,
+          },
+        ],
+      },
+    });
+  });
+
   test("rejects duplicate actor names and sorts mixed actor lists by name", () => {
     const runtime = makeRuntimeWithMouse([], { x: 640, y: 360 });
 

@@ -70,7 +70,12 @@ final class DrawOverlayService {
                 case .spotlight:
                     guard let rects = item.rects, !rects.isEmpty else { continue }
                     let finalViewRects = rects.map { OverlayWindowManager.shared.screenRectToView($0.cgRect) }
-                    finalPath = Self.makeSpotlightPath(in: container.bounds, cutouts: finalViewRects, cornerRadius: resolvedStyle.cornerRadius ?? 18)
+                    finalPath = Self.makeSpotlightPath(
+                        in: container.bounds,
+                        cutouts: finalViewRects,
+                        cornerRadius: resolvedStyle.cornerRadius ?? 18,
+                        shape: item.spotlightShape
+                    )
                 case .marker:
                     guard let markerShape = item.markerShape, let markerRect = item.markerRect else { continue }
                     let markerStyle = item.resolvedMarkerStyle
@@ -170,6 +175,10 @@ final class DrawOverlayService {
                     shape.strokeColor = nil
                     shape.lineWidth = 0
                     shape.fillRule = .evenOdd
+                    shape.shadowColor = resolvedStyle.fillColor
+                    shape.shadowOpacity = Float((resolvedStyle.blur ?? 0) > 0 ? 1 : 0)
+                    shape.shadowRadius = resolvedStyle.blur ?? 0
+                    shape.shadowOffset = .zero
                 case .xray:
                     break
                 case .marker:
@@ -301,7 +310,10 @@ final class DrawOverlayService {
                     strokeColor: item.from?.strokeColor ?? presentation?.strokeColor ?? shape.strokeColor,
                     fillColor: item.from?.fillColor ?? presentation?.fillColor ?? shape.fillColor,
                     lineWidth: item.from?.lineWidth ?? shape.lineWidth,
-                    opacity: item.from?.opacity.map(Float.init) ?? shape.opacity
+                    opacity: item.from?.opacity.map(Float.init) ?? shape.opacity,
+                    shadowColor: shape.shadowColor,
+                    shadowOpacity: shape.shadowOpacity,
+                    shadowRadius: shape.shadowRadius
                 )
             }
         case .line:
@@ -315,7 +327,10 @@ final class DrawOverlayService {
                     strokeColor: item.from?.strokeColor ?? presentation?.strokeColor ?? shape.strokeColor,
                     fillColor: nil,
                     lineWidth: item.from?.lineWidth ?? shape.lineWidth,
-                    opacity: item.from?.opacity.map(Float.init) ?? shape.opacity
+                    opacity: item.from?.opacity.map(Float.init) ?? shape.opacity,
+                    shadowColor: shape.shadowColor,
+                    shadowOpacity: shape.shadowOpacity,
+                    shadowRadius: shape.shadowRadius
                 )
             }
         case .xray:
@@ -332,7 +347,10 @@ final class DrawOverlayService {
                 strokeColor: presentation.strokeColor ?? shape.strokeColor,
                 fillColor: presentation.fillColor ?? shape.fillColor,
                 lineWidth: presentation.lineWidth,
-                opacity: presentation.opacity
+                opacity: presentation.opacity,
+                shadowColor: presentation.shadowColor ?? shape.shadowColor,
+                shadowOpacity: presentation.shadowOpacity,
+                shadowRadius: presentation.shadowRadius
             )
         }
 
@@ -341,7 +359,10 @@ final class DrawOverlayService {
             strokeColor: shape.strokeColor,
             fillColor: shape.fillColor,
             lineWidth: shape.lineWidth,
-            opacity: shape.opacity
+            opacity: shape.opacity,
+            shadowColor: shape.shadowColor,
+            shadowOpacity: shape.shadowOpacity,
+            shadowRadius: shape.shadowRadius
         )
     }
 
@@ -355,6 +376,9 @@ final class DrawOverlayService {
         var animations: [CAAnimation] = []
         let endLineWidth = end.lineWidth ?? start.lineWidth
         let endOpacity = end.opacity.map(Float.init) ?? start.opacity
+        let endShadowOpacity: Float = end.blur == nil || (end.blur ?? 0) <= 0 ? 0 : 1
+        let endShadowRadius = end.blur ?? start.shadowRadius
+        let endShadowColor = end.fillColor ?? start.shadowColor
 
         if let startPath = start.path, !Self.pathsEqual(startPath, finalPath) {
             let pathAnimation = CABasicAnimation(keyPath: "path")
@@ -399,6 +423,33 @@ final class DrawOverlayService {
             opacityAnimation.duration = animation.duration
             opacityAnimation.timingFunction = animation.timingFunction
             animations.append(opacityAnimation)
+        }
+
+        if start.shadowOpacity != endShadowOpacity {
+            let shadowOpacityAnimation = CABasicAnimation(keyPath: "shadowOpacity")
+            shadowOpacityAnimation.fromValue = start.shadowOpacity
+            shadowOpacityAnimation.toValue = endShadowOpacity
+            shadowOpacityAnimation.duration = animation.duration
+            shadowOpacityAnimation.timingFunction = animation.timingFunction
+            animations.append(shadowOpacityAnimation)
+        }
+
+        if start.shadowRadius != endShadowRadius {
+            let shadowRadiusAnimation = CABasicAnimation(keyPath: "shadowRadius")
+            shadowRadiusAnimation.fromValue = start.shadowRadius
+            shadowRadiusAnimation.toValue = endShadowRadius
+            shadowRadiusAnimation.duration = animation.duration
+            shadowRadiusAnimation.timingFunction = animation.timingFunction
+            animations.append(shadowRadiusAnimation)
+        }
+
+        if let startShadow = start.shadowColor, let endShadow = endShadowColor, !Self.colorsEqual(startShadow, endShadow) {
+            let shadowColorAnimation = CABasicAnimation(keyPath: "shadowColor")
+            shadowColorAnimation.fromValue = startShadow
+            shadowColorAnimation.toValue = endShadow
+            shadowColorAnimation.duration = animation.duration
+            shadowColorAnimation.timingFunction = animation.timingFunction
+            animations.append(shadowColorAnimation)
         }
 
         guard !animations.isEmpty else {
@@ -668,13 +719,24 @@ final class DrawOverlayService {
         }
     }
 
-    static func makeSpotlightPath(in bounds: CGRect, cutouts: [CGRect], cornerRadius: CGFloat) -> CGPath {
+    fileprivate static func makeSpotlightPath(in bounds: CGRect, cutouts: [CGRect], cornerRadius: CGFloat, shape: DrawOverlaySpotlightShape?) -> CGPath {
         let path = CGMutablePath()
         path.addRect(bounds)
-        let coalescedCutouts = coalescedSpotlightCutouts(cutouts)
-        let usesRoundedCutouts = coalescedCutouts.count == cutouts.count
-        for cutout in coalescedCutouts {
-            path.addPath(makeRectPath(for: cutout, cornerRadius: usesRoundedCutouts ? cornerRadius : 0))
+        let spotlightShape = shape ?? .rect
+        let cutoutRects: [CGRect]
+        switch spotlightShape {
+        case .rect:
+            let coalescedCutouts = coalescedSpotlightCutouts(cutouts)
+            let usesRoundedCutouts = coalescedCutouts.count == cutouts.count
+            cutoutRects = coalescedCutouts
+            for cutout in cutoutRects {
+                path.addPath(makeRectPath(for: cutout, cornerRadius: usesRoundedCutouts ? cornerRadius : 0))
+            }
+        case .circ:
+            cutoutRects = cutouts.map(\.standardized).filter { $0.width > 0 && $0.height > 0 }
+            for cutout in cutoutRects {
+                path.addEllipse(in: cutout)
+            }
         }
         return path
     }
@@ -1135,6 +1197,23 @@ private extension DrawOverlayItem {
         }
     }
 
+    var spotlightShape: DrawOverlaySpotlightShape? {
+        guard kind == .spotlight else {
+            return nil
+        }
+        let raw = shape?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch raw {
+        case nil, "":
+            return .rect
+        case "rect":
+            return .rect
+        case "circ", "circle":
+            return .circ
+        default:
+            return nil
+        }
+    }
+
     var markerShape: DrawOverlayMarkerShape? {
         let raw = shape?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch raw {
@@ -1227,6 +1306,11 @@ private enum DrawOverlayScanDirection: String {
     }
 }
 
+fileprivate enum DrawOverlaySpotlightShape: String, Decodable {
+    case rect
+    case circ
+}
+
 private struct DrawOverlayLine: Decodable {
     let from: DrawOverlayPoint
     let to: DrawOverlayPoint
@@ -1292,7 +1376,8 @@ private struct DrawOverlayStyle: Decodable {
         color: nil,
         size: nil,
         padding: nil,
-        roughness: nil
+        roughness: nil,
+        blur: nil
     )
 
     static let defaultLineStyle = DrawOverlayStyle(
@@ -1304,7 +1389,8 @@ private struct DrawOverlayStyle: Decodable {
         color: nil,
         size: nil,
         padding: nil,
-        roughness: nil
+        roughness: nil,
+        blur: nil
     )
     static let defaultSpotlightStyle = DrawOverlayStyle(
         stroke: nil,
@@ -1315,7 +1401,8 @@ private struct DrawOverlayStyle: Decodable {
         color: nil,
         size: nil,
         padding: nil,
-        roughness: nil
+        roughness: nil,
+        blur: nil
     )
     static let defaultMarkerStyle = DrawOverlayStyle(
         stroke: nil,
@@ -1326,7 +1413,8 @@ private struct DrawOverlayStyle: Decodable {
         color: "#00E5FF",
         size: 4,
         padding: 8,
-        roughness: 0.22
+        roughness: 0.22,
+        blur: nil
     )
 
     let stroke: String?
@@ -1338,6 +1426,7 @@ private struct DrawOverlayStyle: Decodable {
     let size: CGFloat?
     let padding: CGFloat?
     let roughness: CGFloat?
+    let blur: CGFloat?
 
     private static let hexColorPattern = "^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$"
     private static let rgbColorPattern = "^rgb\\(\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*,\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*,\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*\\)$"
@@ -1537,4 +1626,7 @@ private struct DrawOverlayRenderState {
     let fillColor: CGColor?
     let lineWidth: CGFloat
     let opacity: Float
+    let shadowColor: CGColor?
+    let shadowOpacity: Float
+    let shadowRadius: CGFloat
 }

@@ -326,6 +326,45 @@ describe("draw script spotlight normalization", () => {
       items: [{ kind: "spotlight", rects: [{ x: 0, y: 0, width: 10, height: 10 }], style: { fill: "black" } }],
     })).toThrow("items[0].style.fill must be a CSS color like #RGB[A], #RRGGBB[AA], rgb(...), or rgba(...)");
   });
+
+  test("normalizes spotlight payloads with circular cutouts and blur", () => {
+    const result = normalizeDrawScriptPayload({
+      items: [
+        {
+          kind: "spotlight",
+          shape: "circ",
+          rects: [
+            { x: 40, y: 50, width: 300, height: 200 },
+          ],
+          style: {
+            fill: "#000000A0",
+            cornerRadius: 0,
+            opacity: 0.5,
+            blur: 16,
+          },
+        },
+      ],
+    });
+
+    expect(result.items[0]).toEqual({
+      kind: "spotlight",
+      remove: false,
+      shape: "circ",
+      rects: [
+        { x: 40, y: 50, width: 300, height: 200 },
+      ],
+      style: {
+        fill: "#000000A0",
+        cornerRadius: 0,
+        opacity: 0.5,
+        blur: 16,
+      },
+      animation: {
+        durMs: 200,
+        ease: "easeInOut",
+      },
+    });
+  });
 });
 
 describe("draw script marker normalization", () => {
