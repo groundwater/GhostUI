@@ -146,25 +146,6 @@ const HELP_TOPICS: HelpTopic[] = [
     related: ["gfx", "output"],
   },
   {
-    id: "print",
-    title: "Print a single property",
-    summary: "Print one property value from the live UI tree.",
-    aliases: ["p"],
-    usage: [
-      "gui print <selector>... .property",
-      "gui p <selector>... .property",
-    ],
-    examples: [
-      "gui print Button#Save .value",
-      "gui p Window#Main Button#Save .enabled",
-    ],
-    notes: [
-      "Writes the matched path to stderr and the property value to stdout.",
-      "The final argument must be a .property token.",
-    ],
-    related: ["query", "output"],
-  },
-  {
     id: "window",
     title: "Window actions",
     summary: "Focus or drag windows by cgWindowId.",
@@ -443,25 +424,6 @@ const HELP_TOPICS: HelpTopic[] = [
     usage: ["gui actor run <name>.dismiss [--timeout <ms>]"],
     examples: ["gui actor run pointer.main.dismiss"],
     related: ["actor run"],
-  },
-  {
-    id: "img",
-    title: "Capture an element screenshot",
-    summary: "Screenshot a matched element as PNG.",
-    aliases: [],
-    usage: [
-      "gui img <query>",
-      "gui img <query> --out file.png",
-    ],
-    examples: [
-      "gui img 'Button#Save' --out save.png",
-      "gui img 'Window#Main' | open -f -a Preview",
-    ],
-    notes: [
-      "Writes PNG bytes to stdout unless --out is set.",
-      "Falls back to AX lookup when the matched node has no frame geometry.",
-    ],
-    related: ["query", "output", "ax"],
   },
   {
     id: "rec",
@@ -1733,15 +1695,13 @@ const HELP_TOPICS: HelpTopic[] = [
     examples: [
       "GUIML on stdout for gui query and gui crdt query",
       "JSON on stdout for gui cg windows, gui ws frontmost, gui pb types, and gui display list",
-      "PNG on stdout for gui img without --out",
       "Capture bytes on stdout for gui rec image and gui rec filmstrip without --out",
     ],
     notes: [
       "Action commands usually print machine-readable output to stdout and status text like ok or queued to stderr.",
       "VAT commands print readable summaries on a TTY and JSON when stdout is piped.",
-      "gui print writes the matched path to stderr and the property value to stdout.",
     ],
-    related: ["query", "print", "img", "rec", "ax", "cg", "ws", "pb", "display", "defaults", "log"],
+    related: ["query", "rec", "ax", "cg", "ws", "pb", "display", "defaults", "log"],
   },
   {
     id: "ids",
@@ -1911,10 +1871,8 @@ export function renderHelpIndex(): string {
       "gui help query",
       "gui help ca",
       "gui help gfx",
-      "gui help print",
       "gui help window",
       "gui help actor",
-      "gui help img",
       "gui help rec",
       "gui help crdt",
       "gui help vat",
@@ -1954,8 +1912,6 @@ export function renderRootHelp(): string {
       "gui vat <subcommand>        Mount/query virtual access tables",
       "gui ca script -             Render a JSON draw overlay from stdin",
       "gui gfx <subcommand>        Render public visual-annotation overlays",
-      "gui print <selector>...     Print one property (alias: gui p)",
-      "gui img <query>             Screenshot a matched element",
       "gui rec <mode>              Capture a rect or cgWindowId",
       "gui window <subcommand>     Focus or drag windows by cgWindowId",
       "gui actor run <name>.<…>    Animate a named overlay actor",

@@ -1015,7 +1015,7 @@ function projectAttrsWithRemainder(node: PlainNode, query: QueryNode, mode: "*" 
 /**
  * Find the deepest matching node in the tree for a parsed query, preserving all
  * original attributes (including frame coordinates x, y, w, h).
- * Used by `gui img` where we need geometry, not display output.
+ * Used by geometry-sensitive callers where we need coordinates, not display output.
  */
 export function findMatchedNode(root: PlainNode, queries: QueryNode[]): PlainNode | null {
   const result = findMatchedNodeWithContext(root, queries);

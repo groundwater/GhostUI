@@ -24,6 +24,8 @@ describe("cli help rendering", () => {
     expect(help).toContain("gui help [topic]");
     expect(help).toContain("gui skill <target>");
     expect(help).toContain("gui rec <mode>");
+    expect(help).not.toContain("gui print <selector>...");
+    expect(help).not.toContain("gui img <query>");
     expect(help).toContain("Run `gui help` for the full index.");
   });
 
@@ -35,6 +37,8 @@ describe("cli help rendering", () => {
     expect(help).toContain("gui help ca");
     expect(help).toContain("gui help gfx");
     expect(help).not.toContain("gui help draw");
+    expect(help).not.toContain("gui help print");
+    expect(help).not.toContain("gui help img");
     expect(help).toContain("gui help rec");
     expect(help).toContain("gui help query-language");
     expect(help).toContain("gui help vat");
@@ -194,10 +198,15 @@ describe("cli help rendering", () => {
     expect(findHelpTopic("vat query")?.id).toBe("vat query");
     expect(findHelpTopic("vat watch")?.id).toBe("vat watch");
     expect(findHelpTopic("mount")).toBeUndefined();
+    expect(findHelpTopic("print")).toBeUndefined();
+    expect(findHelpTopic("p")).toBeUndefined();
+    expect(findHelpTopic("img")).toBeUndefined();
 
     expect(findHelpTopic("ax q")).toBeUndefined();
     expect(renderHelpTopic("ax q")).toContain("Unknown help topic: ax q");
     expect(renderHelpTopic("ax q")).not.toContain("gui ax q");
+    expect(renderHelpTopic("print")).toContain("Unknown help topic: print");
+    expect(renderHelpTopic("img")).toContain("Unknown help topic: img");
   });
 
   test("ax snapshot topic is registered and has correct flags", () => {
@@ -545,6 +554,8 @@ describe("cli skill surface", () => {
     expect(skill).toContain("gui crdt");
     expect(skill).toContain("gui ax click");
     expect(skill).toContain("gui cg key");
+    expect(skill).not.toContain("gui print");
+    expect(skill).not.toContain("gui img");
   });
 
   test("renders a useful error for unknown skill targets", () => {

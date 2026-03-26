@@ -52,7 +52,7 @@ function renderSkillBody(target: SkillTarget): string {
     `- Use \`${usageLine("cg key")}\` or \`${usageLine("cg type")}\` when you need synthetic keyboard input.`,
     "",
     "## Command map",
-    `- Live GUI state: \`${usageLine("query")}\`, \`${usageLine("crdt query")}\`, \`${usageLine("print")}\`, \`${usageLine("img")}\``,
+    `- Live GUI state: \`${usageLine("query")}\`, \`${usageLine("crdt query")}\``,
     `- Raw AX inspection and action: \`${usageLine("ax tree")}\`, \`${usageLine("ax query")}\`, \`${usageLine("ax click")}\`, \`${usageLine("ax set")}\`, \`${usageLine("ax hover")}\``,
     `- Input and raw windowing: \`${usageLine("cg key")}\`, \`${usageLine("cg type")}\`, \`${usageLine("window focus")}\`, \`${usageLine("window drag")}\`, \`${usageLine("cg windows")}\``,
     `- System state: \`${usageLine("pb read")}\`, \`${usageLine("display list")}\`, \`${usageLine("defaults read")}\`, \`${usageLine("log")}\``,
