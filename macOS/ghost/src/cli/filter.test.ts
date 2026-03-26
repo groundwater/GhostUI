@@ -449,6 +449,73 @@ describe("filterTree — wildcard queries", () => {
   });
 });
 
+describe("filterTree — backslash elimination", () => {
+  test("Application#Codex\\Group\\* removes all Group wrappers and merges their children upward", () => {
+    const tree: PlainNode = {
+      _tag: "Root",
+      _children: [
+        {
+          _tag: "Application",
+          _id: "app:com.example.Codex",
+          title: "Codex",
+          _children: [
+            {
+              _tag: "Group",
+              _id: "Group::0",
+              _children: [
+                {
+                  _tag: "Group",
+                  _id: "Group::1",
+                  _children: [
+                    { _tag: "Button", _id: "Button:Run:0", title: "Run" },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = filterTree(tree, parseQuery("Application#Codex\\Group\\*"));
+    const guiml = toGUIML(result.nodes);
+
+    expect(result.matchCount).toBe(1);
+    expect(guiml).toContain("<Application#com.example.Codex>");
+    expect(guiml).toContain("<Button#Run />");
+    expect(guiml).not.toContain("Group");
+  });
+
+  test("\\Foo\\Bar\\* removes both Foo and Bar wrappers from the returned tree", () => {
+    const tree: PlainNode = {
+      _tag: "Root",
+      _children: [
+        {
+          _tag: "Foo",
+          _id: "Foo::0",
+          _children: [
+            {
+              _tag: "Bar",
+              _id: "Bar::0",
+              _children: [
+                { _tag: "Button", _id: "Button:Save:0", title: "Save" },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = filterTree(tree, parseQuery("\\Foo\\Bar\\*"));
+    const guiml = toGUIML(result.nodes);
+
+    expect(result.matchCount).toBe(1);
+    expect(guiml).toContain("<Button#Save />");
+    expect(guiml).not.toContain("Foo");
+    expect(guiml).not.toContain("Bar");
+  });
+});
+
 describe("materializeSelectedMatches", () => {
   const windowTree: PlainNode = {
     _tag: "Window",

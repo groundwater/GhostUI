@@ -271,6 +271,46 @@ function preserveMaterializedNode(node: PlainNode, query: QueryNode): PlainNode 
     : node;
 }
 
+function collectElideQueries(query: QueryNode, acc: QueryNode[] = []): QueryNode[] {
+  if (query.elide) {
+    acc.push(query);
+  }
+  if (query.children) {
+    for (const child of query.children) {
+      collectElideQueries(child, acc);
+    }
+  }
+  return acc;
+}
+
+function elisionMatchesNode(node: PlainNode, query: QueryNode): boolean {
+  if (!tagMatches(node, query.tag)) return false;
+  return specifierMatches(node, query);
+}
+
+function applyElisions(node: PlainNode, queries: QueryNode[]): PlainNode[] {
+  const children = node._children
+    ? mergeResults(node._children.flatMap(child => applyElisions(child, queries)))
+    : [];
+
+  const shouldElide = queries.some(query => elisionMatchesNode(node, query));
+  if (shouldElide) {
+    return children;
+  }
+
+  if (node._children && node._children.length > 0) {
+    const result: PlainNode = cloneNodeSymbols({ ...node } as PlainNode, node);
+    if (children.length > 0) {
+      result._children = children;
+    } else {
+      delete result._children;
+    }
+    return [result];
+  }
+
+  return [node];
+}
+
 function collectMaterializedMatchResults(
   selected: SelectedForestMatch[],
   options: { rootless?: boolean } = {},
@@ -280,9 +320,13 @@ function collectMaterializedMatchResults(
   for (const { node, path, query } of selected) {
     const finalized = finalizeMatch(node, query);
     if (!finalized) continue;
+    const elideQueries = collectElideQueries(query);
     for (const item of finalized) {
       const wrapped = rootless || queryOmitsAncestors(query) ? item : wrapInPath(item, path);
-      results.push(preserveMaterializedNode(wrapped, query));
+      const elided = elideQueries.length > 0 ? applyElisions(wrapped, elideQueries) : [wrapped];
+      for (const elidedNode of elided) {
+        results.push(preserveMaterializedNode(elidedNode, query));
+      }
     }
   }
   return { results, matchCount: results.length };

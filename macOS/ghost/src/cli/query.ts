@@ -44,14 +44,9 @@ export function parseQuery(input: string): QueryNode[] {
       throw new Error(`Unexpected token: ${spec}`);
     }
 
-    const { tag, as: asName, id, index, indexEnd, omitWrapper, omitAncestors } = parseTypeSpec(spec);
-    const node: QueryNode = { tag };
-    if (omitWrapper) node.omitWrapper = true;
-    if (omitAncestors) node.omitAncestors = true;
-    if (asName !== undefined) node.as = asName;
-    if (id !== undefined) node.id = id;
-    if (index !== undefined) node.index = index;
-    if (indexEnd !== undefined) node.indexEnd = indexEnd;
+    const node = spec.includes("\\")
+      ? parseElisionChainSpec(spec)
+      : buildNodeFromSpec(spec);
 
     // Consume bracket predicates: [attr], [attr=val], [attr!=val], [attr~=val]
     // Also handles [*] and [**] introspection, comma-separated predicates, and @suppress
@@ -85,13 +80,14 @@ export function parseQuery(input: string): QueryNode[] {
       if (peek() === "{") {
         // A / { B C } or A // { B C } — distribute over brace contents
         consume(); // eat '{'
-        node.children = parseList();
+        const tail = getChainTail(node);
+        tail.children = parseList();
         if (peek() !== "}") {
           throw new Error("Expected '}'");
         }
         consume(); // eat '}'
         if (isDirect) {
-          for (const child of node.children) {
+          for (const child of tail.children || []) {
             child.directChild = true;
           }
         }
@@ -102,11 +98,13 @@ export function parseQuery(input: string): QueryNode[] {
           throw new Error(`Cannot use ** with ${op} operator`);
         }
         if (isDirect) child.directChild = true;
-        node.children = [child];
+        const tail = getChainTail(node);
+        tail.children = [child];
       }
     } else if (peek() === "{") {
       consume(); // eat '{'
-      node.children = parseList();
+      const tail = getChainTail(node);
+      tail.children = parseList();
       if (peek() !== "}") {
         throw new Error("Expected '}'");
       }
@@ -117,6 +115,18 @@ export function parseQuery(input: string): QueryNode[] {
   }
 
   return parseList();
+}
+
+function buildNodeFromSpec(spec: string): QueryNode {
+  const { tag, as: asName, id, index, indexEnd, omitWrapper, omitAncestors } = parseTypeSpec(spec);
+  const node: QueryNode = { tag };
+  if (omitWrapper) node.omitWrapper = true;
+  if (omitAncestors) node.omitAncestors = true;
+  if (asName !== undefined) node.as = asName;
+  if (id !== undefined) node.id = id;
+  if (index !== undefined) node.index = index;
+  if (indexEnd !== undefined) node.indexEnd = indexEnd;
+  return node;
 }
 
 /** True when a parsed query contains [*] or [**] introspection anywhere. */
@@ -230,6 +240,76 @@ function parseTypeSpec(spec: string): {
   const tag = ALIASES[rawTag] || rawTag;
   const rest = spec.slice(colonIdx + 1);
   return withModifiers({ tag, ...parseIndexSpec(rest, spec) });
+}
+
+function parseElisionChainSpec(spec: string): QueryNode {
+  const segments = splitBackslashSegments(spec);
+  if (segments.length <= 1) {
+    return buildNodeFromSpec(spec);
+  }
+
+  const leadingEmpty = segments[0] === "";
+  const trailingEmpty = segments[segments.length - 1] === "";
+  const parts = segments.filter(part => part.length > 0);
+  if (parts.length === 0) {
+    return buildNodeFromSpec("**");
+  }
+
+  let root: QueryNode;
+  let startIndex = 0;
+
+  if (leadingEmpty) {
+    root = buildNodeFromSpec("**");
+  } else {
+    root = buildNodeFromSpec(parts[0]);
+    startIndex = 1;
+  }
+
+  let current = root;
+  for (let i = startIndex; i < parts.length; i++) {
+    const child = buildNodeFromSpec(parts[i]);
+    if (trailingEmpty || i < parts.length - 1) {
+      child.elide = true;
+    }
+    current.children = [child];
+    current = child;
+  }
+
+  return root;
+}
+
+function splitBackslashSegments(spec: string): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  let inDouble = false;
+  let inSingle = false;
+
+  for (let i = 0; i < spec.length; i++) {
+    const ch = spec[i];
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === "\\" && !inDouble && !inSingle) {
+      segments.push(spec.slice(start, i));
+      start = i + 1;
+    }
+  }
+
+  segments.push(spec.slice(start));
+  return segments;
+}
+
+function getChainTail(node: QueryNode): QueryNode {
+  let current = node;
+  while (current.children && current.children.length === 1) {
+    current = current.children[0];
+  }
+  return current;
 }
 
 /** Parse "N" or "N:M" into index (and optional indexEnd). */

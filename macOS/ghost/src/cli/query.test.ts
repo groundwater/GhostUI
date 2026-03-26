@@ -57,6 +57,38 @@ describe("parseQuery — transparent scoped queries", () => {
   });
 });
 
+describe("parseQuery — backslash elimination segments", () => {
+  test("\\Foo\\ parses a transparent elimination chain", () => {
+    expect(parseQuery("\\Foo\\")).toEqual([{
+      tag: "**",
+      children: [{ tag: "Foo", elide: true }],
+    }]);
+  });
+
+  test("\\Foo\\Bar\\ parses chained elimination segments", () => {
+    expect(parseQuery("\\Foo\\Bar\\")).toEqual([{
+      tag: "**",
+      children: [{
+        tag: "Foo",
+        elide: true,
+        children: [{ tag: "Bar", elide: true }],
+      }],
+    }]);
+  });
+
+  test("Application#Codex\\Group\\* marks Group as an elided path segment", () => {
+    expect(parseQuery("Application#Codex\\Group\\*")).toEqual([{
+      tag: "Application",
+      id: "Codex",
+      children: [{
+        tag: "Group",
+        elide: true,
+        children: [{ tag: "*" }],
+      }],
+    }]);
+  });
+});
+
 describe("parseQuery — hybrid introspection brackets", () => {
   test("[subrole,*] parses as predicates plus remainder introspection", () => {
     expect(parseQuery("Button[subrole,*]")).toEqual([{

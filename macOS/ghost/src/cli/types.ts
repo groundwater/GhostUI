@@ -29,6 +29,7 @@ export interface QueryNode {
   tag: string;           // e.g. "Button", "Window", "*"
   omitWrapper?: boolean;  // leading @Foo — match Foo but omit wrapper from output
   omitAncestors?: boolean; // leading @@Foo — omit wrapper and ancestor path from output
+  elide?: boolean;        // backslash-delimited segment — match Foo but elide all matching wrappers from output
   as?: string;           // rename tag in output: foo@bar → as="foo", tag="bar"
   id?: string;           // e.g. "com.apple.Terminal" from Application#com.apple.Terminal
   index?: number;        // e.g. 0 in "Button:0" — nth matching sibling
