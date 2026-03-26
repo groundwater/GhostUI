@@ -14,10 +14,9 @@ import {
   buildSnapshot, findAndClick, findAndPerformAction, findAndSetValue, findAndHover, findAndSelectCursor, findAndType, findCursor, resolveAXQuerySubtree,
   pointerEvent, screenshot, setWindowPosition, focusWindow,
   startObserving, stopObserving, type AXObserverEvent,
-  pbRead, pbWrite, pbTypes, pbClear, getDisplays,
+  getDisplays,
   axAt, axGetActions, axGetActionsForTarget, findAndFocus, focusContainingWindow, menuAt,
 } from "./a11y/native-ax.js";
-import { handleDefaults } from "./server/defaults.js";
 import { createDaemonAuthContext } from "./server/auth.js";
 import { buildLazyTree } from "./a11y/live-tree.js";
 import { ensureDisplayUIBuild } from "./build/display-ui.js";
@@ -1712,7 +1711,7 @@ const server = Bun.serve({
     }
 
     // CORS preflight for action endpoints
-    if (req.method === "OPTIONS" && (url.pathname === "/api/action" || url.pathname.startsWith("/api/action/") || url.pathname === "/api/switch-app" || url.pathname === "/api/window/focus" || url.pathname === "/api/window/drag" || url.pathname === "/api/input" || url.pathname.startsWith("/api/overlay/") || url.pathname.startsWith("/api/actors") || url.pathname === "/api/pb/write" || url.pathname === "/api/pb/clear" || url.pathname === "/api/defaults/write" || url.pathname.startsWith("/api/cg/"))) {
+    if (req.method === "OPTIONS" && (url.pathname === "/api/action" || url.pathname.startsWith("/api/action/") || url.pathname === "/api/switch-app" || url.pathname === "/api/window/focus" || url.pathname === "/api/window/drag" || url.pathname === "/api/input" || url.pathname.startsWith("/api/overlay/") || url.pathname.startsWith("/api/actors") || url.pathname.startsWith("/api/cg/"))) {
       return new Response(null, {
         status: 204,
         headers: {
@@ -2123,92 +2122,6 @@ const server = Bun.serve({
           status: 500, headers: { "content-type": "application/json", "access-control-allow-origin": "*" },
         });
       }
-    }
-
-    // ── Pasteboard routes ──
-    if (url.pathname === "/api/pb/read") {
-      const type = url.searchParams.get("type") || undefined;
-      try {
-        const text = pbRead(type);
-        return new Response(JSON.stringify({ value: text }), { headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      } catch (e: unknown) {
-        return new Response(JSON.stringify({ error: errorMessage(e) }), { status: 500, headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      }
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/pb/write") {
-      const body = await req.json() as { text: string; type?: string };
-      if (typeof body.text !== "string") {
-        return new Response(JSON.stringify({ error: "missing text field" }), { status: 400, headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      }
-      try {
-        const ok = pbWrite(body.text, body.type);
-        return new Response(JSON.stringify({ ok }), { headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      } catch (e: unknown) {
-        return new Response(JSON.stringify({ error: errorMessage(e) }), { status: 500, headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      }
-    }
-
-    if (url.pathname === "/api/pb/types") {
-      try {
-        const types = pbTypes();
-        return new Response(JSON.stringify(types), { headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      } catch (e: unknown) {
-        return new Response(JSON.stringify({ error: errorMessage(e) }), { status: 500, headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      }
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/pb/clear") {
-      try {
-        pbClear();
-        return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      } catch (e: unknown) {
-        return new Response(JSON.stringify({ error: errorMessage(e) }), { status: 500, headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      }
-    }
-
-    // ── Display routes ──
-    if (url.pathname === "/api/display/list") {
-      try {
-        const displays = getDisplays();
-        return new Response(JSON.stringify(displays, null, 2), { headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      } catch (e: unknown) {
-        return new Response(JSON.stringify({ error: errorMessage(e) }), { status: 500, headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      }
-    }
-
-    if (url.pathname === "/api/display/main") {
-      try {
-        const displays = getDisplays();
-        const main = displays.find(d => d.main) || displays[0] || null;
-        return new Response(JSON.stringify(main, null, 2), { headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      } catch (e: unknown) {
-        return new Response(JSON.stringify({ error: errorMessage(e) }), { status: 500, headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      }
-    }
-
-    if (url.pathname.startsWith("/api/display/") && url.pathname !== "/api/display/list" && url.pathname !== "/api/display/main") {
-      const idStr = url.pathname.slice("/api/display/".length);
-      const id = Number(idStr);
-      if (isNaN(id)) {
-        return new Response(JSON.stringify({ error: `invalid display id: ${idStr}` }), { status: 400, headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      }
-      try {
-        const displays = getDisplays();
-        const display = displays.find(d => d.id === id) || null;
-        if (!display) {
-          return new Response(JSON.stringify({ error: `display not found: ${id}` }), { status: 404, headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-        }
-        return new Response(JSON.stringify(display, null, 2), { headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      } catch (e: unknown) {
-        return new Response(JSON.stringify({ error: errorMessage(e) }), { status: 500, headers: { "content-type": "application/json", "access-control-allow-origin": "*" } });
-      }
-    }
-
-    // ── Defaults routes ──
-    {
-      const defaultsRes = await handleDefaults(req, url);
-      if (defaultsRes) return defaultsRes;
     }
 
     // Static files

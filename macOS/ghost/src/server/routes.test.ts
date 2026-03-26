@@ -50,11 +50,11 @@ describe("CLI doc path defaults", () => {
 });
 
 describe("daemon auth", () => {
-  test("protects CLI and operator API routes but leaves display and websocket paths open", () => {
+  test("protects CLI and operator API routes but leaves icon and websocket paths open", () => {
     expect(isProtectedDaemonPath("/cli/tree")).toBe(true);
     expect(isProtectedDaemonPath("/api/trigger")).toBe(true);
     expect(isProtectedDaemonPath("/api/icon")).toBe(false);
-    expect(isProtectedDaemonPath("/api/display/list")).toBe(false);
+    expect(isProtectedDaemonPath("/api/display/list")).toBe(true);
     expect(isProtectedDaemonPath("/crdt")).toBe(false);
   });
 

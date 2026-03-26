@@ -12,7 +12,6 @@ export function isProtectedDaemonPath(pathname: string): boolean {
   if (pathname.startsWith("/cli/")) return true;
   if (!pathname.startsWith("/api/")) return false;
   if (pathname === "/api/icon") return false;
-  if (pathname.startsWith("/api/display/")) return false;
   return true;
 }
 
