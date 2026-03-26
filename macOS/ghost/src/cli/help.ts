@@ -221,7 +221,7 @@ const HELP_TOPICS: HelpTopic[] = [
       "Spotlight actors retain their latest rect/circ geometry until gui actor run <name>.off or gui actor kill <name>.",
       "Bare gui actor run <name> resolves the actor type when possible and prints type-appropriate usage.",
     ],
-    related: ["display", "output"],
+    related: ["output"],
   },
   {
     id: "actor spawn",
