@@ -30,7 +30,7 @@ describe("daemon auth", () => {
     resetDaemonAuthSecretCache();
     const { calls, restore } = mockFetch({ ok: true });
     try {
-      await daemonFetch("http://localhost:7861/cli/tree");
+      await daemonFetch("http://localhost:7861/cli/log");
       expect(calls[0].init?.headers).toEqual({ authorization: "Bearer test-secret" });
     } finally {
       if (previous === undefined) delete process.env.GHOSTUI_AUTH_SECRET;
@@ -47,7 +47,7 @@ describe("daemon auth", () => {
     resetDaemonAuthSecretCache();
     const { calls, restore } = mockFetch({ ok: true });
     try {
-      await daemonFetch("http://localhost:7861/cli/tree");
+      await daemonFetch("http://localhost:7861/cli/log");
       expect(calls[0].init?.headers).toEqual({});
     } finally {
       if (previous === undefined) delete process.env.GHOSTUI_AUTH_SECRET;
@@ -64,7 +64,7 @@ describe("daemon auth", () => {
     resetDaemonAuthSecretCache();
     const { calls, restore } = mockFetch({ ok: true });
     try {
-      await daemonFetch("http://localhost:7861/cli/tree");
+      await daemonFetch("http://localhost:7861/cli/log");
       expect(calls[0].init?.headers).toEqual({ authorization: "Bearer native-secret" });
     } finally {
       if (previous === undefined) delete process.env.GHOSTUI_AUTH_SECRET;
@@ -82,7 +82,7 @@ describe("daemon auth", () => {
     resetDaemonAuthSecretCache();
     const { calls, restore } = mockFetch({ ok: true });
     try {
-      await daemonFetch("http://localhost:7861/cli/tree");
+      await daemonFetch("http://localhost:7861/cli/log");
       expect(calls[0].init?.headers).toEqual({ authorization: "Bearer plist-secret" });
     } finally {
       if (previous === undefined) delete process.env.GHOSTUI_KEYCHAIN_ACCESS_GROUP;

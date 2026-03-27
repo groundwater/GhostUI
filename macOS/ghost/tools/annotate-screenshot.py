@@ -19,7 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 # ---------------------------------------------------------------------------
 RAW_SCREENSHOT = "/tmp/ghost-annotate-raw.png"
 OUTPUT_PATH = "/tmp/ghost-annotated.png"
-TREE_URL = "http://localhost:7861/cli/tree"
+TREE_URL = "http://localhost:7861/cli/live-tree"
 
 DOT_RADIUS = 4
 LABEL_FONT_SIZE = 11

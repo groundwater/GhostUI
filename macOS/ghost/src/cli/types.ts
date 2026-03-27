@@ -1,4 +1,4 @@
-/** Plain JSON node as returned by /cli/tree */
+/** Plain JSON node as returned by daemon query and snapshot endpoints. */
 export interface PlainNode {
   _tag: string;
   _text?: string;

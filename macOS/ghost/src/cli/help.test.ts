@@ -219,8 +219,6 @@ describe("cli help rendering", () => {
     expect(findHelpTopic("q")?.id).toBe("query");
     expect(renderHelpTopic("q")).toContain("gui help query");
     expect(renderHelpTopic("q")).toContain("gui q '<query>'");
-    expect(findHelpTopic("crdt q")?.id).toBe("crdt query");
-    expect(renderHelpTopic("crdt q")).toContain("gui crdt q '<query>'");
 
     expect(findHelpTopic("vat")?.id).toBe("vat");
     expect(findHelpTopic("vat mount")?.id).toBe("vat mount");
@@ -623,7 +621,6 @@ describe("cli skill surface", () => {
     expect(skill).toContain("## Operating rules");
     expect(skill).toContain("## Verification");
     expect(skill).toContain("## Failure modes");
-    expect(skill).toContain("gui crdt");
     expect(skill).toContain("gui ax click");
     expect(skill).toContain("gui cg key");
     expect(skill).not.toContain("gui print");

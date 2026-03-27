@@ -1,6 +1,5 @@
 import * as Y from "yjs";
 import type { CRDTStore } from "../crdt/store.js";
-import { attachBroadcast } from "../server/ws.js";
 import { populateFromDescriptor, type NodeDescriptor } from "../crdt/schema.js";
 import { isWindowDocPath, windowDocPath } from "../crdt/doc-paths.js";
 import { getAppMetadata } from "./native-ax.js";
@@ -44,16 +43,10 @@ export function configureRefresherRuntime(runtime: {
   if (runtime.log) logFn = runtime.log;
 }
 
-const broadcastAttachedDocs = new Set<string>();
 const lastJSONByPass = new Map<string, string>();
 
 function ensureBroadcast(store: CRDTStore, docPath: string): Y.Doc {
-  const doc = store.getOrCreate(docPath);
-  if (!broadcastAttachedDocs.has(docPath)) {
-    attachBroadcast(doc, docPath);
-    broadcastAttachedDocs.add(docPath);
-  }
-  return doc;
+  return store.getOrCreate(docPath);
 }
 
 type LiveMetadata = ReturnType<typeof getAppMetadata>;
@@ -330,9 +323,8 @@ function syncWindowDocs(store: CRDTStore, metadata: LiveMetadata, leaseState: Wi
   for (const path of store.paths()) {
     if (!isWindowDocPath(path)) continue;
     if (liveDocPaths.has(path)) continue;
-      store.destroy(path);
-      broadcastAttachedDocs.delete(path);
-    }
+    store.destroy(path);
+  }
   }
 
 export function syncMetadataDocs(
@@ -427,7 +419,6 @@ export function pruneAppByBundleId(store: CRDTStore, docPath: string, bundleId: 
     const windowRoot = windowDoc.getMap("root");
     if ((windowRoot.get("bundleId") as string | undefined) === bundleId) {
       store.destroy(path);
-      broadcastAttachedDocs.delete(path);
     }
   }
 }

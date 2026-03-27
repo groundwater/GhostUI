@@ -1,6 +1,4 @@
 import { resolve, join } from "path";
-
-const DISPLAY_UI_DIR = resolve(import.meta.dir, "..", "..", "dist", "display-ui");
 const ASSETS_DIR = resolve(import.meta.dir, "..", "assets");
 const APPS_DIR = resolve(import.meta.dir, "..", "apps");
 
@@ -24,25 +22,6 @@ function getMime(path: string): string {
 
 export function handleStatic(req: Request): Response | null {
   const url = new URL(req.url);
-  const displayPageMatch = /^\/display\/(\d+)\/?$/.exec(url.pathname);
-
-  // ── Display UI at /display/<n> ──
-  if (displayPageMatch) {
-    const file = Bun.file(join(DISPLAY_UI_DIR, "index.html"));
-    return new Response(file, { headers: { "content-type": "text/html; charset=utf-8" } });
-  }
-  if (url.pathname.startsWith("/display/")) {
-    const relPath = url.pathname.slice("/display/".length);
-    if (/^\d+\/?$/.test(relPath)) return null;
-    if (relPath.includes("..")) return null;
-    const file = Bun.file(join(DISPLAY_UI_DIR, relPath));
-    return new Response(file, {
-      headers: {
-        "content-type": getMime(relPath),
-        "cache-control": "no-cache",
-      },
-    });
-  }
 
   // ── App bundle assets at /apps/<bundleId>/* ──
   if (url.pathname.startsWith("/apps/")) {
@@ -68,11 +47,6 @@ export function handleStatic(req: Request): Response | null {
         "cache-control": "public, max-age=86400",
       },
     });
-  }
-
-  // Redirect root-ish entry points to /display/0
-  if (url.pathname === "/" || url.pathname === "/index.html" || url.pathname === "/display" || url.pathname === "/display/") {
-    return Response.redirect("/display/0", 302);
   }
 
   return null;

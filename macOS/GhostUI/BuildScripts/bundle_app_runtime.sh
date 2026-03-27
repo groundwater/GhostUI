@@ -41,7 +41,6 @@ if [[ ! -d "${NATIVE_DIR}/node_modules" ]]; then
   (cd "${NATIVE_DIR}" && npm install --ignore-scripts)
 fi
 
-(cd "${GHOST_DIR}" && "${BUN}" run build:display-ui)
 mkdir -p "${HELPERS}" "${RESOURCES}/ghost/native/build/Release"
 rm -rf "${HELPER_DEST}"
 rm -f "${APP}/Contents/MacOS/gui"

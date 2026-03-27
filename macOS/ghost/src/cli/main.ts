@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { fetchTree, fetchCRDTTree, fetchLiveQuery, postScanOverlay, postDrawOverlay, postKeyboardInput, postAction, switchApp, focusWindow, dragWindow, fetchFilteredCGWindows, findCGWindowAt, fetchRawWorkspaceApps, fetchRawWorkspaceFrontmost, fetchLogs, openLogStream, fetchScreen, fetchLeases, openEventStream, killActor, listActors, postRecFilmstrip, postRecImage, runActor, spawnActor, postCgMove, postCgClick, postCgDoubleClick, postCgDrag, postCgScroll, postCgKeyDown, postCgKeyUp, postCgModDown, postCgModUp, fetchCgMousePos, fetchCgMouseState, fetchVatMounts, fetchVatQuery, fetchVatTree, openVatWatchStream, postVatMount, deleteVatMount, postVatPolicy, VatMountRequestError } from "./client.js";
+import { fetchTree, fetchLiveQuery, postScanOverlay, postDrawOverlay, postKeyboardInput, postAction, switchApp, focusWindow, dragWindow, fetchFilteredCGWindows, findCGWindowAt, fetchRawWorkspaceApps, fetchRawWorkspaceFrontmost, fetchLogs, openLogStream, fetchScreen, openEventStream, killActor, listActors, postRecFilmstrip, postRecImage, runActor, spawnActor, postCgMove, postCgClick, postCgDoubleClick, postCgDrag, postCgScroll, postCgKeyDown, postCgKeyUp, postCgModDown, postCgModUp, fetchCgMousePos, fetchCgMouseState, fetchVatMounts, fetchVatQuery, fetchVatTree, openVatWatchStream, postVatMount, deleteVatMount, postVatPolicy, VatMountRequestError } from "./client.js";
 import { parseQuery } from "./query.js";
 import { filterTree, bfsFirst, collectObscuredApps, findMatchedNode, OBSCURED_THRESHOLD, matchTree } from "./filter.js";
 import { toGUIML } from "./guiml.js";
@@ -192,10 +192,6 @@ const HELP_FLAGS = new Set(["--help", "-h"]);
 
 export function resolveCommandAlias(command: string | undefined): string | undefined {
   return command === "q" ? "query" : command;
-}
-
-export function resolveCRDTSubcommandAlias(subcommand: string | undefined): string | undefined {
-  return subcommand === "q" ? "query" : subcommand;
 }
 
 const ACTOR_RUN_ACTION_NAMES = new Set([
@@ -3928,53 +3924,6 @@ async function main() {
           default:
             console.error(`Unknown ws command: ${wsCmd}`);
             failUsage("ws");
-        }
-        break;
-      }
-
-      case "crdt": {
-        const crdtSub = resolveCRDTSubcommandAlias(args[1]);
-        switch (crdtSub) {
-          case "query": {
-            const tree = await fetchCRDTTree();
-            const crdtArgs = args.slice(2);
-            let crdtFirst = 100;
-            for (let i = 0; i < crdtArgs.length; i++) {
-              if (crdtArgs[i] === "--first") {
-                const n = Number(crdtArgs[i + 1]);
-                if (isNaN(n) || n < 0) { console.error("--first requires a non-negative number (0 = unlimited)"); process.exit(1); }
-                crdtFirst = n;
-                crdtArgs.splice(i, 2);
-                i--;
-              }
-            }
-            const queryStr = crdtArgs.join(" ");
-            if (!queryStr) { failUsage("crdt query"); }
-            const queries = parseQuery(queryStr);
-            const { nodes: filteredAll } = filterTree(tree, queries);
-            const filtered = bfsFirst(filteredAll, crdtFirst);
-            const rendered = renderQueryResult(filtered, queries);
-            if (rendered.length > 0) {
-              console.log(rendered);
-            }
-            break;
-          }
-          case "leases": {
-            const leases = await fetchLeases();
-            console.log(JSON.stringify(leases, null, 2));
-            break;
-          }
-
-          case undefined: {
-            // No subcommand — dump full raw CRDT tree
-            const tree = await fetchCRDTTree();
-            console.log(toGUIML([tree]));
-            break;
-          }
-
-          default:
-            console.error(`Unknown crdt command: ${crdtSub}`);
-            failUsage("crdt");
         }
         break;
       }

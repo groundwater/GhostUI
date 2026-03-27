@@ -122,14 +122,6 @@ export async function fetchTree(): Promise<PlainNode> {
   return res.json() as Promise<PlainNode>;
 }
 
-export async function fetchCRDTTree(): Promise<PlainNode> {
-  const res = await daemonFetch(`${BASE}/cli/tree`);
-  if (!res.ok) {
-    throw new Error(`/cli/tree failed (${res.status}): ${await res.text()}`);
-  }
-  return res.json() as Promise<PlainNode>;
-}
-
 export async function postVatMount(request: VatMountRequest & { mountPolicy?: VatMountPolicy }): Promise<VatMountResponse> {
   try {
     const res = await daemonFetch(`${BASE}/api/vat/mount`, {
@@ -468,14 +460,6 @@ export async function fetchScreen(): Promise<unknown> {
   const res = await daemonFetch(`${BASE}/api/raw/screen`);
   if (!res.ok) {
     throw new Error(`/api/raw/screen failed (${res.status}): ${await res.text()}`);
-  }
-  return res.json();
-}
-
-export async function fetchLeases(): Promise<unknown> {
-  const res = await daemonFetch(`${BASE}/api/raw/leases`);
-  if (!res.ok) {
-    throw new Error(`/api/raw/leases failed (${res.status}): ${await res.text()}`);
   }
   return res.json();
 }

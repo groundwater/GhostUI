@@ -67,8 +67,6 @@ generate:
 native:
 	@echo "Installing ghost dependencies..."
 	cd macOS/ghost && bun install
-	@echo "Building display UI bundle..."
-	cd macOS/ghost && bun run build:display-ui
 	@echo "Building N-API accessibility module..."
 	cd macOS/ghost/native && npm install --ignore-scripts
 	mkdir -p macOS/ghost/native/build/Release/.deps/Release/obj.target/ghostui_ax

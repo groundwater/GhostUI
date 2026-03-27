@@ -21,7 +21,7 @@ function check(label: string, ok: boolean) {
   }
 }
 
-// Realistic tree structure matching /cli/tree output
+// Realistic tree structure matching daemon PlainNode output
 function makeTree(): PlainNode {
   return {
     _tag: "Display",
