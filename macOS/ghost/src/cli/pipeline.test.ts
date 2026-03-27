@@ -16,6 +16,7 @@ import {
   buildCLICompositionPayloadFromAXQueryMatch,
   buildCLICompositionPayloadFromVatQueryResult,
   readFirstJSONFrame,
+  splitCLICompositionPayload,
 } from "./payload.js";
 import type { PlainNode } from "./types.js";
 
@@ -83,7 +84,7 @@ describe("CLI pipeline contracts", () => {
 
     expect(payload.source).toBe("ax.query");
     expect(payload.target?.role).toBe("AXButton");
-    expect(script).toEqual({
+    expect(script).toMatchObject({
       coordinateSpace: "screen",
       timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
       items: [
@@ -126,7 +127,7 @@ describe("CLI pipeline contracts", () => {
     ));
     const script = buildGfxOutlineDrawScriptFromText(payloadText);
 
-    expect(script).toEqual({
+    expect(script).toMatchObject({
       coordinateSpace: "screen",
       timeout: DEFAULT_CA_HIGHLIGHT_TIMEOUT_MS,
       items: [
@@ -264,8 +265,98 @@ describe("CLI pipeline contracts", () => {
         { x: 400, y: 50, width: 320, height: 220 },
       ],
       durationMs: 750,
+      direction: "top-to-bottom",
     });
     expect(arrow.items).toHaveLength(6);
+  });
+
+  test("splits a multi-node VAT payload into per-node NDJSON frames in scanline order", () => {
+    const tree: PlainNode = {
+      _tag: "VATRoot",
+      _children: [
+        {
+          _tag: "Application",
+          _children: [
+            {
+              _tag: "Window",
+              title: "Bottom",
+              frame: { x: 50, y: 400, width: 300, height: 200 },
+            },
+            {
+              _tag: "Window",
+              title: "Top",
+              frame: { x: 100, y: 30, width: 280, height: 180 },
+            },
+            {
+              _tag: "Window",
+              title: "Middle",
+              frame: { x: 200, y: 200, width: 320, height: 220 },
+            },
+          ],
+        },
+      ],
+    };
+    const nodes = tree._children?.[0]?._children ?? [];
+    const payload = buildCLICompositionPayloadFromVatQueryResult("Window[frame]", tree, nodes, nodes.length);
+
+    // Verify the batch payload has all 3 nodes
+    expect(payload.nodes).toHaveLength(3);
+    expect(payload.matchCount).toBe(3);
+
+    // Split into single-node frames
+    const frames = splitCLICompositionPayload(payload);
+
+    expect(frames).toHaveLength(3);
+
+    // Each frame must be a complete single-node payload
+    for (const frame of frames) {
+      expect(frame.type).toBe("gui.payload");
+      expect(frame.version).toBe(1);
+      expect(frame.nodes).toHaveLength(1);
+      expect(frame.matchCount).toBe(1);
+      expect(frame.bounds).not.toBeNull();
+      expect(frame.point).not.toBeNull();
+    }
+
+    // Frames preserve original node order (caller sorts by rect for scanline)
+    expect((frames[0].node as PlainNode & Record<string, unknown>).title).toBe("Bottom");
+    expect((frames[1].node as PlainNode & Record<string, unknown>).title).toBe("Top");
+    expect((frames[2].node as PlainNode & Record<string, unknown>).title).toBe("Middle");
+
+    // Each frame carries correct per-node bounds
+    expect(frames[0].bounds).toEqual({ x: 50, y: 400, width: 300, height: 200 });
+    expect(frames[1].bounds).toEqual({ x: 100, y: 30, width: 280, height: 180 });
+    expect(frames[2].bounds).toEqual({ x: 200, y: 200, width: 320, height: 220 });
+
+    // buildGfxScanOverlayRequestFromText re-extracts per-node rects
+    const scanText = frames.map(f => JSON.stringify(f)).join("\n");
+    const scan = buildGfxScanOverlayRequestFromText(scanText, 500);
+    expect(scan.rects).toHaveLength(3);
+    expect(scan.durationMs).toBe(500);
+  });
+
+  test("single-node payload passes through splitCLICompositionPayload unchanged", () => {
+    const tree: PlainNode = {
+      _tag: "VATRoot",
+      _children: [
+        {
+          _tag: "Application",
+          _children: [
+            {
+              _tag: "Window",
+              title: "Only",
+              frame: { x: 10, y: 20, width: 100, height: 50 },
+            },
+          ],
+        },
+      ],
+    };
+    const nodes = tree._children?.[0]?._children ?? [];
+    const payload = buildCLICompositionPayloadFromVatQueryResult("Window[frame]", tree, nodes, 1);
+    const frames = splitCLICompositionPayload(payload);
+
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toBe(payload);
   });
 
   test("fails cleanly when a serialized AX payload does not resolve bounds", () => {

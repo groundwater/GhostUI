@@ -21,7 +21,9 @@ import {
   buildCLICompositionPayloadFromVatQueryResult,
   normalizeCLICompositionPayload,
   readFirstJSONFrame,
+  readJSONFrames,
   parseCLICompositionPayloadStream,
+  splitCLICompositionPayload,
   type CLICompositionRect,
   requireCLICompositionBounds,
   serializeCLICompositionPayload,
@@ -1070,6 +1072,16 @@ async function writeStdoutText(text: string): Promise<void> {
   });
 }
 
+async function runGfxOutlineFromStream(
+  stream: ReadableStream<Uint8Array>,
+  options: GfxOutlineOptions,
+): Promise<void> {
+  for await (const frame of readJSONFrames(stream)) {
+    await attachDrawOverlay(buildGfxOutlineDrawScriptFromText(frame, options));
+    emitPassthroughStdout(`${frame}\n`, process.stdout.isTTY);
+  }
+}
+
 async function tailVatWatchStream(
   watchArgs: VatWatchCLIArgs,
   tty: boolean,
@@ -1741,6 +1753,7 @@ export const DEFAULT_GFX_MARKER_COLOR = "#FF3B30";
 export const DEFAULT_GFX_MARKER_SIZE = 4;
 export const DEFAULT_GFX_MARKER_PADDING = 0;
 export const DEFAULT_GFX_MARKER_ROUGHNESS = 0.2;
+export type GfxScanDirection = "top-to-bottom" | "left-to-right";
 export type GfxOutlineTransition = "fade" | "pop" | "draw";
 export type GfxArrowTarget =
   | "center"
@@ -1768,6 +1781,11 @@ export interface GfxOutlineOptions {
   fill: string;
   durationMs: number;
   transition?: GfxOutlineTransition;
+}
+
+export interface GfxScanOptions {
+  durationMs: number;
+  direction: GfxScanDirection;
 }
 
 function normalizeHighlightRect(value: unknown): CLICompositionRect | null {
@@ -2251,26 +2269,86 @@ export function buildAXHighlightDrawScriptFromText(
 
 export function buildGfxScanOverlayRequestFromText(
   input: string,
-  durationMs = DEFAULT_GFX_SCAN_DURATION_MS,
+  optionsOrDuration: GfxScanOptions | number = DEFAULT_GFX_SCAN_DURATION_MS,
 ): {
   rects: CLICompositionRect[];
   durationMs: number;
+  direction: GfxScanDirection;
 } {
+  const options = typeof optionsOrDuration === "number"
+    ? { durationMs: optionsOrDuration, direction: "top-to-bottom" as const }
+    : optionsOrDuration;
   return {
     rects: resolveGfxRectsFromText(input, "gui gfx scan -"),
-    durationMs,
+    durationMs: options.durationMs,
+    direction: options.direction,
   };
 }
 
-async function runGfxScanFromText(
-  input: string,
-  durationMs = DEFAULT_GFX_SCAN_DURATION_MS,
+function leadingEdgeForRect(rect: CLICompositionRect, direction: GfxScanDirection): number {
+  return direction === "left-to-right" ? rect.x : rect.y;
+}
+
+function trailingEdgeForRect(rect: CLICompositionRect, direction: GfxScanDirection): number {
+  return direction === "left-to-right" ? rect.x + rect.width : rect.y + rect.height;
+}
+
+function computeGfxScanDelays(
+  payloads: CLICompositionPayload[],
+  direction: GfxScanDirection,
+  durationMs: number,
+): Array<{ payload: CLICompositionPayload; delayMs: number }> {
+  if (payloads.length === 0) {
+    return [];
+  }
+  const entries = payloads.map((payload, index) => {
+    const rects = resolveGfxRectsFromPayload(payload, "gui gfx scan -");
+    return {
+      payload,
+      index,
+      leadingEdge: Math.min(...rects.map(rect => leadingEdgeForRect(rect, direction))),
+      trailingEdge: Math.max(...rects.map(rect => trailingEdgeForRect(rect, direction))),
+    };
+  }).sort((left, right) => left.leadingEdge - right.leadingEdge || left.index - right.index);
+
+  const minEdge = Math.min(...entries.map(entry => entry.leadingEdge));
+  const maxEdge = Math.max(...entries.map(entry => entry.trailingEdge));
+  const span = Math.max(maxEdge - minEdge, 0);
+  let previousDelayMs = 0;
+
+  return entries.map((entry) => {
+    const absoluteDelayMs = span > 0
+      ? Math.round(((entry.leadingEdge - minEdge) / span) * durationMs)
+      : 0;
+    const delayMs = Math.max(0, absoluteDelayMs - previousDelayMs);
+    previousDelayMs = absoluteDelayMs;
+    return { payload: entry.payload, delayMs };
+  });
+}
+
+async function runGfxScanFromPayloads(
+  payloads: CLICompositionPayload[],
+  options: GfxScanOptions,
 ): Promise<void> {
-  const request = buildGfxScanOverlayRequestFromText(input, durationMs);
-  if (process.env.GHOSTUI_TEST_SKIP_OVERLAY === "1") {
+  const streamedPayloads = payloads.flatMap(splitCLICompositionPayload);
+  if (streamedPayloads.length === 0) {
     return;
   }
-  await postScanOverlay(request.rects, request.durationMs);
+  const request = {
+    rects: streamedPayloads.flatMap(payload => resolveGfxRectsFromPayload(payload, "gui gfx scan -")),
+    durationMs: options.durationMs,
+    direction: options.direction,
+  };
+  const entries = computeGfxScanDelays(streamedPayloads, options.direction, options.durationMs);
+  if (process.env.GHOSTUI_TEST_SKIP_OVERLAY !== "1") {
+    await postScanOverlay(request.rects, request.durationMs, undefined, request.direction);
+  }
+  for (const entry of entries) {
+    if (process.env.GHOSTUI_TEST_SKIP_OVERLAY !== "1" && !(await waitForDelayOrAbort(entry.delayMs))) {
+      return;
+    }
+    emitPassthroughStdout(`${JSON.stringify(entry.payload)}\n`, process.stdout.isTTY);
+  }
 }
 
 function parseGfxColor(raw: string, usageTopic: string): string {
@@ -2425,6 +2503,27 @@ export function parseGfxDuration(
     index--;
   }
   return durationMs;
+}
+
+export function parseGfxScanOptions(
+  argv: string[],
+  usageTopic: string,
+): GfxScanOptions {
+  const durationMs = parseGfxDuration(argv, usageTopic, DEFAULT_GFX_SCAN_DURATION_MS);
+  let direction: GfxScanDirection = "top-to-bottom";
+  for (let index = 0; index < argv.length; index++) {
+    if (argv[index] !== "--direction") {
+      continue;
+    }
+    const value = argv[index + 1];
+    if (value !== "top-to-bottom" && value !== "left-to-right") {
+      failUsage(usageTopic, "--direction must be one of: top-to-bottom, left-to-right");
+    }
+    direction = value;
+    argv.splice(index, 2);
+    index--;
+  }
+  return { durationMs, direction };
 }
 
 export function parseGfxSpotlightOptions(
@@ -3046,9 +3145,7 @@ async function main() {
             if (gfxArgs.length !== 1 || gfxArgs[0] !== "-") {
               failUsage("gfx outline");
             }
-            const input = await readFirstJSONFrame(Bun.stdin.stream());
-            await attachDrawOverlay(buildGfxOutlineDrawScriptFromText(input, outlineOptions));
-            emitPassthroughStdout(input, process.stdout.isTTY);
+            await runGfxOutlineFromStream(Bun.stdin.stream(), outlineOptions);
             break;
           }
           case "xray": {
@@ -3116,13 +3213,14 @@ async function main() {
             break;
           }
           case "scan": {
-            const durationMs = parseGfxDuration(gfxArgs, "gfx scan", DEFAULT_GFX_SCAN_DURATION_MS);
+            const scanOptions = parseGfxScanOptions(gfxArgs, "gfx scan");
             if (gfxArgs.length !== 1 || gfxArgs[0] !== "-") {
               failUsage("gfx scan");
             }
-            const input = await readFirstJSONFrame(Bun.stdin.stream());
-            await runGfxScanFromText(input, durationMs);
-            emitPassthroughStdout(input, process.stdout.isTTY);
+            await runGfxScanFromPayloads(
+              parseCLICompositionPayloadStream(await readStdinText("gfx scan")),
+              scanOptions,
+            );
             break;
           }
           default:

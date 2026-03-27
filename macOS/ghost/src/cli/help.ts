@@ -200,7 +200,7 @@ const HELP_TOPICS: HelpTopic[] = [
     aliases: [],
     usage: [
       "gui gfx outline [--color <css-color>] [--size <pixels>] [--transition <fade|pop|draw>] [--fill <css-color>] [--duration <milliseconds>] -",
-      "gui gfx scan [--duration <milliseconds>] -",
+      "gui gfx scan [--duration <milliseconds>] [--direction <top-to-bottom|left-to-right>] -",
       "gui gfx xray [--duration <milliseconds>] -",
       "gui gfx spotlight [--color <css-color>] [--duration <milliseconds>] -",
       "gui gfx arrow [--color <css-color>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--target <anchor>] [--from <x> <y>] -",
@@ -208,7 +208,7 @@ const HELP_TOPICS: HelpTopic[] = [
     ],
     examples: [
       "gui ax query --only --app Terminal '@@{Button[subrole~=DecrementPage]}' | gui gfx outline --color '#00E5FF' --size 3 -",
-      "gui vat query 'Window[frame]' | gui gfx scan --duration 750 -",
+      "gui vat query 'Window[frame]' | gui gfx scan --duration 750 --direction left-to-right -",
       "gui vat query 'Window[frame]' | gui gfx xray -",
       "gui vat query 'Window[frame]' | gui gfx spotlight --color 'rgba(0,0,0,0.35)' --duration 900 -",
       "gui vat query 'Window[frame]' | gui gfx arrow -",
@@ -218,7 +218,7 @@ const HELP_TOPICS: HelpTopic[] = [
       "The stdin-driven subcommands read one or more AX/VAT target-bearing JSON payloads from stdin; `draw` also accepts a literal box.",
       "`outline`, `xray`, `spotlight`, `arrow`, and stdin `draw` share the same target contract: every leaf node with frame coordinates contributes a rect in deterministic traversal order, and payloads without leaf-frame nodes fall back to their top-level bounds.",
       "`outline` accepts --color, --size, optional --fill, --duration, and --transition with fade, pop, or draw. Omit --fill for a hollow outline.",
-      "`scan` resolves the same AX/VAT bounds but only drives the red scan-line overlay; it does not add outline/highlight rects.",
+      "`scan` resolves the same AX/VAT bounds, drives the red scan-line overlay, and emits one payload per crossed element in scan order. Use --direction with top-to-bottom or left-to-right.",
       "`spotlight` does not outline the target. It computes the union of all resolved bounds and dims the complement outside that union.",
       "`spotlight` accepts --color and --duration, defaults to color `rgba(0,0,0,.5)`, and uses 1200ms like the other non-scan/xray overlay lifetimes.",
       "`arrow` defaults to color `#FF3B30`, size `6`, length `100`, duration `400`, and target `center`. Use --target with center, topleft, topright, bottomleft, bottomright, left, top, right, or bottom to pick the anchor point on the resolved target rect. Use --from <x> <y> to override the starting point and ignore --length.",

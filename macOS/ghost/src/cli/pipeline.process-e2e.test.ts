@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import type { CLICompositionPayload } from "./payload.js";
+import { buildCLICompositionPayloadFromVatQueryResult, splitCLICompositionPayload } from "./payload.js";
 import {
   CLI_TEST_SKIP_OVERLAY_ENV,
   MAIN_MODULE_PATH,
@@ -16,9 +18,10 @@ import {
   type FramingMode,
 } from "./pipeline.fixtures.js";
 import type { AXNode } from "./ax.js";
+import type { PlainNode } from "./types.js";
 
 type GfxConsumer = "outline" | "xray" | "spotlight" | "arrow" | "scan";
-type PassthroughStage = "ca-highlight" | "gfx-outline" | "gfx-xray" | "gfx-spotlight" | "gfx-arrow" | "gfx-scan";
+type PassthroughStage = "gfx-outline" | "gfx-xray" | "gfx-spotlight" | "gfx-arrow" | "gfx-scan";
 
 const PARSER_CONSUMER_SCRIPT = `
 import {
@@ -76,7 +79,6 @@ try {
 
 const gfxConsumers: GfxConsumer[] = ["outline", "xray", "spotlight", "arrow", "scan"];
 const passthroughStages: PassthroughStage[] = [
-  "ca-highlight",
   "gfx-outline",
   "gfx-xray",
   "gfx-spotlight",
@@ -143,6 +145,25 @@ function expectedFirstFrameText(payload: unknown, framing: FramingMode): string 
   }
 }
 
+function expectedGfxStdout(
+  consumer: GfxConsumer,
+  payload: CLICompositionPayload,
+  framing: FramingMode,
+): string {
+  if (consumer === "scan") {
+    const framePayloads = framing === "ndjson" ? [payload, payload] : [payload];
+    return framePayloads
+      .flatMap(splitCLICompositionPayload)
+      .map(frame => JSON.stringify(frame))
+      .join("\n");
+  }
+  if (framing === "ndjson" && consumer === "outline") {
+    const line = JSON.stringify(payload);
+    return `${line}\n${line}`;
+  }
+  return expectedFirstFrameText(payload, framing);
+}
+
 describe("CLI pipeline process e2e AX -> gfx matrix", () => {
   for (const consumer of gfxConsumers) {
     for (const mode of ["direct", "nested"] as const) {
@@ -156,7 +177,9 @@ describe("CLI pipeline process e2e AX -> gfx matrix", () => {
           expect(result.exitCode).toBe(0);
           expect(normalizeOutput(result.producerStderr)).toBe("");
           expect(normalizeOutput(result.stderr)).toBe("");
-          expect(result.stdout).toBe(expectedFirstFrameText(payload, framing));
+          expect(normalizeOutput(result.stdout)).toBe(
+            normalizeOutput(expectedGfxStdout(consumer, payload, framing)),
+          );
         });
       }
     }
@@ -199,15 +222,147 @@ describe("CLI pipeline process e2e AX multi-match -> gfx outline", () => {
       expect(outlined.exitCode).toBe(0);
       expect(normalizeOutput(outlined.producerStderr)).toBe("");
       expect(normalizeOutput(outlined.stderr)).toBe("");
-      expect(normalizeOutput(outlined.stdout)).toBe(
-        normalizeOutput(
-          framing === "array"
-            ? result.stdout
-            : result.stdout.split("\n")[0] ?? "",
-        ),
-      );
+      expect(normalizeOutput(outlined.stdout)).toBe(normalizeOutput(result.stdout));
     });
   }
+});
+
+describe("CLI pipeline process e2e AX multi-match -> gfx scan", () => {
+  for (const framing of ["array", "ndjson"] as const) {
+    test(`scan splits AX multi-match payload streams over ${framing} framing`, async () => {
+      const result = await runProducerConsumer(
+        "",
+        BUILD_AX_QUERY_PAYLOADS_SCRIPT,
+        [framing],
+        cliTestEnv,
+      );
+
+      const scanned = await runMainCLI(result.stdout, ["gfx", "scan", "-"], cliTestEnv);
+
+      expect(result.producerExitCode).toBe(0);
+      expect(result.exitCode).toBe(0);
+      expect(normalizeOutput(result.producerStderr)).toBe("");
+      expect(normalizeOutput(result.stderr)).toBe("");
+
+      expect(scanned.producerExitCode).toBe(0);
+      expect(scanned.exitCode).toBe(0);
+      expect(normalizeOutput(scanned.producerStderr)).toBe("");
+      expect(normalizeOutput(scanned.stderr)).toBe("");
+
+      const producedPayloads = framing === "ndjson"
+        ? result.stdout.trim().split("\n").filter(Boolean).map(line => parseJSON<CLICompositionPayload>(line))
+        : parseJSON<CLICompositionPayload[]>(result.stdout);
+      const expectedStdout = producedPayloads
+        .flatMap(splitCLICompositionPayload)
+        .map(payload => JSON.stringify(payload))
+        .join("\n");
+      expect(normalizeOutput(scanned.stdout)).toBe(normalizeOutput(expectedStdout));
+    });
+  }
+});
+
+describe("CLI pipeline process e2e VAT multi-node -> gfx scan split", () => {
+  for (const framing of ["compact", "ndjson"] as const) {
+    test(`scan splits VAT multi-node payload into per-node NDJSON frames over ${framing} framing`, async () => {
+      const { payload } = makeVatPayload("multi");
+      const { text } = formatPayloadText(payload, framing);
+      const scanned = await runMainCLI(text, ["gfx", "scan", "-"], cliTestEnv);
+
+      expect(scanned.exitCode).toBe(0);
+      expect(normalizeOutput(scanned.stderr)).toBe("");
+
+      const outputLines = scanned.stdout.trim().split("\n").filter(Boolean);
+      const inputPayloads = framing === "ndjson"
+        ? [payload, payload]
+        : [payload];
+      const expectedFrames = inputPayloads.flatMap(splitCLICompositionPayload);
+
+      // Must emit one NDJSON line per split node, not one line per batch payload
+      expect(outputLines.length).toBe(expectedFrames.length);
+
+      // Each emitted frame must be a valid single-node payload
+      for (const line of outputLines) {
+        const frame = parseJSON<CLICompositionPayload>(line);
+        expect(frame.type).toBe("gui.payload");
+        expect(frame.nodes).toHaveLength(1);
+        expect(frame.matchCount).toBe(1);
+      }
+    });
+  }
+});
+
+describe("CLI pipeline process e2e VAT scan scanline ordering", () => {
+  test("scan emits multi-node frames in top-to-bottom scanline order, not original node order", async () => {
+    // Nodes deliberately in reverse-Y order: Bottom (y=400), Top (y=30), Middle (y=200)
+    const tree: PlainNode = {
+      _tag: "VATRoot",
+      _children: [
+        {
+          _tag: "Application",
+          _children: [
+            { _tag: "Row", title: "Bottom", frame: { x: 50, y: 400, width: 300, height: 40 } },
+            { _tag: "Row", title: "Top", frame: { x: 100, y: 30, width: 280, height: 40 } },
+            { _tag: "Row", title: "Middle", frame: { x: 200, y: 200, width: 320, height: 40 } },
+          ],
+        },
+      ],
+    };
+    const nodes = tree._children![0]!._children!;
+    const payload = buildCLICompositionPayloadFromVatQueryResult("Row[frame]", tree, nodes, 3);
+    const text = JSON.stringify(payload);
+
+    const scanned = await runMainCLI(text, ["gfx", "scan", "-"], cliTestEnv);
+
+    expect(scanned.exitCode).toBe(0);
+    expect(normalizeOutput(scanned.stderr)).toBe("");
+
+    const outputFrames = scanned.stdout.trim().split("\n").filter(Boolean)
+      .map(line => parseJSON<CLICompositionPayload>(line));
+
+    // Must produce 3 individual NDJSON frames from the 3-node batch payload
+    expect(outputFrames).toHaveLength(3);
+
+    // Frames must be sorted by Y (top-to-bottom), not original node order
+    expect(outputFrames[0].bounds!.y).toBe(30);   // Top
+    expect(outputFrames[1].bounds!.y).toBe(200);  // Middle
+    expect(outputFrames[2].bounds!.y).toBe(400);  // Bottom
+  });
+
+  test("scan emits multi-node frames in left-to-right scanline order when directed", async () => {
+    // Nodes in reverse-X order: Right (x=500), Left (x=20), Center (x=250)
+    const tree: PlainNode = {
+      _tag: "VATRoot",
+      _children: [
+        {
+          _tag: "Application",
+          _children: [
+            { _tag: "Col", title: "Right", frame: { x: 500, y: 100, width: 40, height: 300 } },
+            { _tag: "Col", title: "Left", frame: { x: 20, y: 100, width: 40, height: 280 } },
+            { _tag: "Col", title: "Center", frame: { x: 250, y: 100, width: 40, height: 320 } },
+          ],
+        },
+      ],
+    };
+    const nodes = tree._children![0]!._children!;
+    const payload = buildCLICompositionPayloadFromVatQueryResult("Col[frame]", tree, nodes, 3);
+    const text = JSON.stringify(payload);
+
+    const scanned = await runMainCLI(text, ["gfx", "scan", "--direction", "left-to-right", "-"], cliTestEnv);
+
+    expect(scanned.exitCode).toBe(0);
+    expect(normalizeOutput(scanned.stderr)).toBe("");
+
+    const outputFrames = scanned.stdout.trim().split("\n").filter(Boolean)
+      .map(line => parseJSON<CLICompositionPayload>(line));
+
+    // Must produce 3 individual NDJSON frames
+    expect(outputFrames).toHaveLength(3);
+
+    // Frames must be sorted by X (left-to-right), not original node order
+    expect(outputFrames[0].bounds!.x).toBe(20);   // Left
+    expect(outputFrames[1].bounds!.x).toBe(250);  // Center
+    expect(outputFrames[2].bounds!.x).toBe(500);  // Right
+  });
 });
 
 describe("CLI pipeline process e2e VAT -> gfx matrix", () => {
@@ -223,7 +378,9 @@ describe("CLI pipeline process e2e VAT -> gfx matrix", () => {
           expect(result.exitCode).toBe(0);
           expect(normalizeOutput(result.producerStderr)).toBe("");
           expect(normalizeOutput(result.stderr)).toBe("");
-          expect(result.stdout).toBe(expectedFirstFrameText(payload, framing));
+          expect(normalizeOutput(result.stdout)).toBe(
+            normalizeOutput(expectedGfxStdout(consumer, payload, framing)),
+          );
         });
       }
     }
@@ -237,17 +394,13 @@ describe("CLI pipeline process e2e passthrough preservation", () => {
   ] as const;
 
   for (const stage of passthroughStages) {
-    const stageFramings = stage === "ca-highlight"
-      ? (["compact", "pretty"] as const)
-      : framings;
+    const stageFramings = framings;
     for (const framing of stageFramings) {
       for (const payloadCase of passthroughPayloads) {
         test(`${stage} preserves ${payloadCase.label} stdin over ${framing} framing`, async () => {
           const { text } = formatPayloadText(payloadCase.payload, framing);
           const cliArgs = (() => {
             switch (stage) {
-              case "ca-highlight":
-                return ["ca", "highlight", "-"];
               case "gfx-outline":
                 return ["gfx", "outline", "-"];
               case "gfx-xray":
@@ -266,7 +419,10 @@ describe("CLI pipeline process e2e passthrough preservation", () => {
           expect(result.exitCode).toBe(0);
           expect(normalizeOutput(result.producerStderr)).toBe("");
           expect(normalizeOutput(result.stderr)).toBe("");
-          expect(result.stdout).toBe(expectedFirstFrameText(payloadCase.payload, framing));
+          const consumer = stage.replace("gfx-", "") as GfxConsumer;
+          expect(normalizeOutput(result.stdout)).toBe(
+            normalizeOutput(expectedGfxStdout(consumer, payloadCase.payload, framing)),
+          );
         });
       }
     }

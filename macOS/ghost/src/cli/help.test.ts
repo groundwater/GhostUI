@@ -179,7 +179,7 @@ describe("cli help rendering", () => {
     const help = renderHelpTopic("gfx");
 
     expect(help).toContain("gui gfx outline [--color <css-color>] [--size <pixels>] [--transition <fade|pop|draw>] [--fill <css-color>] [--duration <milliseconds>] -");
-    expect(help).toContain("gui gfx scan [--duration <milliseconds>] -");
+    expect(help).toContain("gui gfx scan [--duration <milliseconds>] [--direction <top-to-bottom|left-to-right>] -");
     expect(help).toContain("gui gfx xray [--duration <milliseconds>] -");
     expect(help).toContain("gui gfx spotlight [--color <css-color>] [--duration <milliseconds>] -");
     expect(help).toContain("gui gfx arrow [--color <css-color>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--target <anchor>] [--from <x> <y>] -");
@@ -188,7 +188,7 @@ describe("cli help rendering", () => {
     expect(help).toContain("read one or more AX/VAT target-bearing JSON payloads from stdin");
     expect(help).toContain("every leaf node with frame coordinates contributes a rect");
     expect(help).toContain("`outline` accepts --color, --size, optional --fill, --duration, and --transition with fade, pop, or draw");
-    expect(help).toContain("only drives the red scan-line overlay");
+    expect(help).toContain("emits one payload per crossed element in scan order");
     expect(help).toContain("dims the complement outside that union");
     expect(help).toContain("`spotlight` accepts --color and --duration, defaults to color `rgba(0,0,0,.5)`, and uses 1200ms");
     expect(help).toContain("defaults to color `#FF3B30`, size `6`, length `100`, duration `400`, and target `center`");

@@ -18,8 +18,17 @@ type LiveGfxCase = {
 
 const testIfLive = resolveLiveEnabled() ? test : test.skip;
 
-function parsePayload(text: string): unknown {
-  return JSON.parse(text);
+function parsePayloads(text: string): unknown[] {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return [];
+  }
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      return [JSON.parse(trimmed)];
+    } catch {}
+  }
+  return trimmed.split("\n").filter(Boolean).map(line => JSON.parse(line));
 }
 
 function makeCasesForCommand(
@@ -92,14 +101,16 @@ describe("CLI pipeline live gfx matrix", () => {
       expect(normalizeOutput(result.producerStderr)).toBe("");
       expect(normalizeOutput(result.stderr)).toBe("");
 
-      const payload = parsePayload(result.stdout);
-      expectCanonicalPayloadShape(payload);
-      expect(payload).toMatchObject({
-        matchCount: 1,
-        target: {
-          role: "AXWindow",
-        },
-      });
+      const payloads = parsePayloads(result.stdout);
+      expect(payloads.length).toBeGreaterThan(0);
+      for (const payload of payloads) {
+        expectCanonicalPayloadShape(payload);
+        expect(payload).toMatchObject({
+          target: {
+            role: "AXWindow",
+          },
+        });
+      }
     }, 60000);
   }
 });

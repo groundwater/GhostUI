@@ -77,6 +77,7 @@ import {
   parseGfxArrowOptions,
   parseGfxDuration,
   parseGfxOutlineOptions,
+  parseGfxScanOptions,
   parseGfxSpotlightOptions,
   parseGfxMarkerOptions,
   parseActorKillTargetsFromText,
@@ -89,6 +90,7 @@ import {
   buildCLICompositionPayloadFromVatQueryResult,
   normalizeCLICompositionPayload,
   readFirstJSONFrame,
+  readJSONFrames,
   parseSingleCLICompositionPayload,
 } from "./payload.js";
 import { filterTree } from "./filter.js";
@@ -1902,6 +1904,41 @@ describe("gfx payload bridges", () => {
     });
   });
 
+  test("reads multiple NDJSON gfx payload frames from stdin in order", async () => {
+    const payload = buildCLICompositionPayloadFromAXQueryMatch({
+      type: "ax.query-match",
+      pid: 42,
+      node: { _tag: "AXButton", _id: "Save" },
+      target,
+    });
+    const secondPayload = buildCLICompositionPayloadFromAXQueryMatch({
+      type: "ax.query-match",
+      pid: 42,
+      node: { _tag: "AXButton", _id: "Cancel" },
+      target: {
+        ...target,
+        bounds: { x: 240, y: 120, width: 60, height: 30 },
+        point: { x: 270, y: 135 },
+        title: "Cancel",
+      },
+    });
+
+    const frames: string[] = [];
+    for await (const frame of readJSONFrames(streamFromChunks([
+      `${JSON.stringify(payload)}\n${JSON.stringify(secondPayload)}\n`,
+    ], { closeWhenDone: false }))) {
+      frames.push(frame);
+      if (frames.length === 2) {
+        break;
+      }
+    }
+
+    expect(frames).toEqual([
+      JSON.stringify(payload),
+      JSON.stringify(secondPayload),
+    ]);
+  });
+
   test("delays gfx spotlight passthrough until the reveal duration elapses, even with a long timeout", async () => {
     const writes: string[] = [];
     const spotlightPayload = buildGfxSpotlightDrawScriptFromText(JSON.stringify(target), {
@@ -2034,12 +2071,22 @@ describe("gfx payload bridges", () => {
         { x: 400, y: 50, width: 320, height: 220 },
       ],
       durationMs: 750,
+      direction: "top-to-bottom",
     });
   });
 
   test("parses gfx duration and strips the flag pair", () => {
     const args = ["--duration", "900", "-"];
     expect(parseGfxDuration(args, "gfx xray", DEFAULT_GFX_XRAY_DURATION_MS)).toBe(900);
+    expect(args).toEqual(["-"]);
+  });
+
+  test("parses gfx scan options and strips consumed flags", () => {
+    const args = ["--duration", "900", "--direction", "left-to-right", "-"];
+    expect(parseGfxScanOptions(args, "gfx scan")).toEqual({
+      durationMs: 900,
+      direction: "left-to-right",
+    });
     expect(args).toEqual(["-"]);
   });
 

@@ -282,10 +282,14 @@ export async function postScanOverlay(
   rects: { x: number; y: number; width: number; height: number }[],
   durationMs = 500,
   outlineRects?: { x: number; y: number; width: number; height: number }[],
+  direction?: "top-to-bottom" | "left-to-right",
 ): Promise<void> {
   const payload: Record<string, unknown> = { rects, durationMs };
   if (outlineRects && outlineRects.length > 0) {
     payload.outlineRects = outlineRects;
+  }
+  if (direction) {
+    payload.direction = direction;
   }
   const res = await daemonFetch(`${BASE}/api/overlay/scan`, {
     method: "POST",

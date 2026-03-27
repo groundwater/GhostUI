@@ -378,6 +378,29 @@ export function buildCLICompositionPayloadFromVatQueryResult(
   };
 }
 
+export function splitCLICompositionPayload(payload: CLICompositionPayload): CLICompositionPayload[] {
+  if (!payload.nodes || payload.nodes.length <= 1) {
+    return [payload];
+  }
+
+  return payload.nodes.map((rootNode) => {
+    const node = findPrimaryVatNode(rootNode) ?? rootNode;
+    const bounds = boundsFromPlainNode(node);
+    const rectUnion = collectRectUnionFromNodes([rootNode]);
+
+    return {
+      ...payload,
+      tree: rootNode,
+      nodes: [rootNode],
+      matchCount: 1,
+      node,
+      rectUnion: rectUnion.length > 0 ? rectUnion : null,
+      bounds,
+      point: bounds ? centerPoint(bounds) : null,
+    };
+  });
+}
+
 export function normalizeCLICompositionPayload(value: unknown, label = "payload"): CLICompositionPayload {
   const rawVatQueryPlan = isRecord(value) && value.vatQueryPlan != null
     ? assertVatA11YQueryPlan(value.vatQueryPlan, `${label}.vatQueryPlan`)
@@ -540,6 +563,11 @@ function stripLeadingJSONNoise(text: string): string {
   return stripLeadingTerminalNoise(text).replace(/^[\s\uFEFF]+/u, "");
 }
 
+function countLeadingJSONNoise(text: string): number {
+  const stripped = stripLeadingJSONNoise(text);
+  return text.length - stripped.length;
+}
+
 function findCompleteJSONObjectOrArrayEnd(text: string): number | null {
   const input = stripLeadingJSONNoise(text);
   if (!input) {
@@ -600,36 +628,64 @@ function findCompleteJSONObjectOrArrayEnd(text: string): number | null {
   return null;
 }
 
-export async function readFirstJSONFrame(stream: ReadableStream<Uint8Array>): Promise<string> {
+function consumeNextJSONFrame(buffer: string): { frame: string; remainder: string } | null {
+  const noiseLength = countLeadingJSONNoise(buffer);
+  const trimmed = buffer.slice(noiseLength);
+  if (!trimmed) {
+    return null;
+  }
+  const end = findCompleteJSONObjectOrArrayEnd(trimmed);
+  if (end === null) {
+    return null;
+  }
+  return {
+    frame: trimmed.slice(0, end).trim(),
+    remainder: trimmed.slice(end),
+  };
+}
+
+export async function* readJSONFrames(
+  stream: ReadableStream<Uint8Array>,
+): AsyncGenerator<string, void, void> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let closed = false;
 
   try {
     while (true) {
+      const nextFrame = consumeNextJSONFrame(buffer);
+      if (nextFrame) {
+        buffer = nextFrame.remainder;
+        yield nextFrame.frame;
+        continue;
+      }
+
       const { value, done } = await reader.read();
       if (done) {
-        closed = true;
-        return stripLeadingJSONNoise(buffer).trim();
+        const trailingFrame = stripLeadingJSONNoise(buffer).trim();
+        if (trailingFrame) {
+          yield trailingFrame;
+        }
+        return;
       }
 
       buffer += decoder.decode(value, { stream: true });
-      const end = findCompleteJSONObjectOrArrayEnd(buffer);
-      if (end !== null) {
-        return stripLeadingJSONNoise(buffer).slice(0, end).trim();
-      }
     }
   } finally {
-    if (!closed) {
-      try {
-        await reader.cancel();
-      } catch {}
-    }
+    try {
+      await reader.cancel();
+    } catch {}
     try {
       reader.releaseLock();
     } catch {}
   }
+}
+
+export async function readFirstJSONFrame(stream: ReadableStream<Uint8Array>): Promise<string> {
+  for await (const frame of readJSONFrames(stream)) {
+    return frame;
+  }
+  return "";
 }
 
 export function requireCLICompositionTarget(payload: CLICompositionPayload, label: string): AXTarget {

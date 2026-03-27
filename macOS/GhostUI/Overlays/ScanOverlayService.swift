@@ -6,13 +6,33 @@ final class ScanOverlayService {
     static let shared = ScanOverlayService()
     private init() {}
 
+    private enum ScanDirection {
+        case topToBottom
+        case leftToRight
+
+        init(_ rawValue: String) {
+            switch rawValue {
+            case "left-to-right":
+                self = .leftToRight
+            default:
+                self = .topToBottom
+            }
+        }
+    }
+
     /// Play a scan animation over the given rects.
     /// Coordinates are screen-absolute (top-left origin).
     /// `durationMs` controls how long the scan line takes to sweep.
-    func playScan(rects: [CGRect], outlineRects: [CGRect] = [], durationMs: Int = 500) {
+    func playScan(
+        rects: [CGRect],
+        outlineRects: [CGRect] = [],
+        durationMs: Int = 500,
+        direction rawDirection: String = "top-to-bottom"
+    ) {
         DispatchQueue.main.async {
             guard let root = OverlayWindowManager.shared.ensureRootLayer() else { return }
             guard !rects.isEmpty || !outlineRects.isEmpty else { return }
+            let direction = ScanDirection(rawDirection)
 
             let container = CALayer()
             container.frame = root.bounds
@@ -28,31 +48,36 @@ final class ScanOverlayService {
             let minY = allViewRects.map { $0.minY }.min()!
             let maxY = allViewRects.map { $0.maxY }.max()!
 
-            let scanWidth = maxX - minX
-            let scanMidX = (minX + maxX) / 2
             let sweepDuration = CFTimeInterval(durationMs) / 1000.0
             let totalHeight = maxY - minY
+            let totalWidth = maxX - minX
 
             let cyan = CGColor(red: 0, green: 0.9, blue: 1.0, alpha: 1.0)
             let red = CGColor(red: 1.0, green: 0.15, blue: 0.1, alpha: 1.0)
 
-            // --- Scan line: thin horizontal bar, bounded to rect extents ---
             let scanLine = CALayer()
-            scanLine.bounds = CGRect(x: 0, y: 0, width: scanWidth, height: 2)
             scanLine.backgroundColor = red
             scanLine.shadowColor = red
             scanLine.shadowRadius = 8
             scanLine.shadowOpacity = 1.0
             scanLine.shadowOffset = .zero
-            // Start at top of bounding box (maxY in view coords since y is flipped)
-            scanLine.position = CGPoint(x: scanMidX, y: maxY)
             container.addSublayer(scanLine)
 
-            // Animate scan line from top to bottom of bounding box
-            // In view coords (bottom-left origin): top = maxY, bottom = minY
-            let sweepAnim = CABasicAnimation(keyPath: "position.y")
-            sweepAnim.fromValue = maxY
-            sweepAnim.toValue = minY
+            let sweepAnim: CABasicAnimation
+            switch direction {
+            case .leftToRight:
+                scanLine.bounds = CGRect(x: 0, y: 0, width: 2, height: totalHeight)
+                scanLine.position = CGPoint(x: minX, y: (minY + maxY) / 2)
+                sweepAnim = CABasicAnimation(keyPath: "position.x")
+                sweepAnim.fromValue = minX
+                sweepAnim.toValue = maxX
+            case .topToBottom:
+                scanLine.bounds = CGRect(x: 0, y: 0, width: totalWidth, height: 2)
+                scanLine.position = CGPoint(x: (minX + maxX) / 2, y: maxY)
+                sweepAnim = CABasicAnimation(keyPath: "position.y")
+                sweepAnim.fromValue = maxY
+                sweepAnim.toValue = minY
+            }
             sweepAnim.duration = sweepDuration
             sweepAnim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             sweepAnim.isRemovedOnCompletion = false
@@ -88,14 +113,20 @@ final class ScanOverlayService {
                 container.addSublayer(outline)
                 outlineLayers.append(outline)
 
-                // Reveal when scan line is partway through the rect
-                // In view coords: rect mid = rect.midY, scan goes maxY -> minY
-                let rectTop = viewRect.midY
                 let progress: CGFloat
-                if totalHeight > 0 {
-                    progress = (maxY - rectTop) / totalHeight
-                } else {
-                    progress = 0
+                switch direction {
+                case .leftToRight:
+                    if totalWidth > 0 {
+                        progress = (viewRect.minX - minX) / totalWidth
+                    } else {
+                        progress = 0
+                    }
+                case .topToBottom:
+                    if totalHeight > 0 {
+                        progress = (maxY - viewRect.maxY) / totalHeight
+                    } else {
+                        progress = 0
+                    }
                 }
                 let revealTime = now + CFTimeInterval(progress) * sweepDuration
 
