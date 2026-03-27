@@ -10,7 +10,8 @@ final class DrawOverlayService {
     private init() {}
     private static let spotlightEpsilon: CGFloat = 0.001
 
-    private var activeContainer: CALayer?
+    private var spotlightContainer: CALayer?
+    private var graphicsContainer: CALayer?
     private var shapeLayersByKey: [String: CAShapeLayer] = [:]
     private var xrayLayersByKey: [String: CALayer] = [:]
     private var attachmentByKey: [String: String] = [:]
@@ -38,13 +39,14 @@ final class DrawOverlayService {
             }
 
             guard let root = OverlayWindowManager.shared.ensureRootLayer() else { return }
-            let container = self.ensureContainer(root: root)
+            let containers = self.ensureContainers(root: root)
 
             guard !payload.items.isEmpty else {
                 return
             }
 
-            var orderedLayers: [(index: Int, layer: CALayer)] = []
+            var orderedGraphicsLayers: [(index: Int, layer: CALayer)] = []
+            var orderedSpotlightLayers: [(index: Int, layer: CALayer)] = []
 
             for (index, item) in payload.items.enumerated() {
                 if item.remove == true {
@@ -71,7 +73,7 @@ final class DrawOverlayService {
                     guard let rects = item.rects, !rects.isEmpty else { continue }
                     let finalViewRects = rects.map { OverlayWindowManager.shared.screenRectToView($0.cgRect) }
                     finalPath = Self.makeSpotlightPath(
-                        in: container.bounds,
+                        in: containers.spotlight.bounds,
                         cutouts: finalViewRects,
                         cornerRadius: resolvedStyle.cornerRadius ?? 18,
                         shape: item.spotlightShape
@@ -80,7 +82,7 @@ final class DrawOverlayService {
                     guard let markerShape = item.markerShape, let markerRect = item.markerRect else { continue }
                     let markerStyle = item.resolvedMarkerStyle
                     let layerKey = Self.layerKey(for: item, attachmentId: attachmentId, index: index)
-                    let (shape, isNewLayer) = self.resolveShapeLayer(forKey: layerKey, container: container)
+                    let (shape, isNewLayer) = self.resolveShapeLayer(forKey: layerKey, container: containers.graphics)
                     self.attachmentByKey[layerKey] = attachmentId
 
                     let finalViewRect = OverlayWindowManager.shared.screenRectToView(markerRect.cgRect.insetBy(dx: -markerStyle.padding, dy: -markerStyle.padding))
@@ -92,7 +94,7 @@ final class DrawOverlayService {
 
                     CATransaction.begin()
                     CATransaction.setDisableActions(true)
-                    shape.frame = container.bounds
+                    shape.frame = containers.graphics.bounds
                     shape.path = finalPath
                     shape.strokeColor = markerStyle.color
                     shape.fillColor = nil
@@ -118,7 +120,7 @@ final class DrawOverlayService {
                     reveal.fillMode = .removed
                     shape.add(reveal, forKey: "markerReveal")
 
-                    orderedLayers.append((index: index, layer: shape))
+                    orderedGraphicsLayers.append((index: index, layer: shape))
                     continue
                 case .xray:
                     guard let rect = item.rect else { continue }
@@ -127,15 +129,15 @@ final class DrawOverlayService {
                         forKey: layerKey,
                         attachmentId: attachmentId,
                         screenRect: rect.cgRect,
-                        container: container
+                        container: containers.graphics
                     )
-                    orderedLayers.append((index: index, layer: xrayLayer))
+                    orderedGraphicsLayers.append((index: index, layer: xrayLayer))
                     self.launchXrayCapture(
                         screenRect: rect.cgRect,
                         layerKey: layerKey,
                         attachmentId: attachmentId,
                         generation: generation,
-                        container: container,
+                        container: containers.graphics,
                         animation: item.animation,
                         direction: item.scanDirection
                     )
@@ -143,7 +145,8 @@ final class DrawOverlayService {
                 }
 
                 let layerKey = Self.layerKey(for: item, attachmentId: attachmentId, index: index)
-                let (shape, isNewLayer) = self.resolveShapeLayer(forKey: layerKey, container: container)
+                let targetContainer = item.kind == .spotlight ? containers.spotlight : containers.graphics
+                let (shape, isNewLayer) = self.resolveShapeLayer(forKey: layerKey, container: targetContainer)
                 self.attachmentByKey[layerKey] = attachmentId
 
                 let startState = self.makeStartState(for: shape, item: item, resolvedStyle: resolvedStyle, finalPath: finalPath)
@@ -154,7 +157,7 @@ final class DrawOverlayService {
 
                 CATransaction.begin()
                 CATransaction.setDisableActions(true)
-                shape.frame = container.bounds
+                shape.frame = targetContainer.bounds
                 shape.path = finalPath
                 shape.strokeColor = resolvedStyle.strokeColor
                 shape.lineWidth = resolvedStyle.lineWidth ?? 2
@@ -197,28 +200,43 @@ final class DrawOverlayService {
                     )
                 }
 
-                orderedLayers.append((index: index, layer: shape))
+                if item.kind == .spotlight {
+                    orderedSpotlightLayers.append((index: index, layer: shape))
+                } else {
+                    orderedGraphicsLayers.append((index: index, layer: shape))
+                }
             }
 
-            self.reorder(container: container, layers: orderedLayers.sorted { $0.index < $1.index }.map(\.layer))
-            self.pruneDetachedLayers()
+            self.reorder(container: containers.spotlight, layers: orderedSpotlightLayers.sorted { $0.index < $1.index }.map(\.layer))
+            self.reorder(container: containers.graphics, layers: orderedGraphicsLayers.sorted { $0.index < $1.index }.map(\.layer))
+            self.pruneDetachedLayers(containers: [containers.spotlight, containers.graphics])
         })
     }
 
-    private func ensureContainer(root: CALayer) -> CALayer {
-        if let container = activeContainer {
-            container.frame = root.bounds
-            if container.superlayer == nil {
-                root.addSublayer(container)
-            }
-            return container
-        }
+    private func ensureContainers(root: CALayer) -> (spotlight: CALayer, graphics: CALayer) {
+        let spotlight = ensureContainer(root: root, existing: spotlightContainer, insertAtBack: true)
+        let graphics = ensureContainer(root: root, existing: graphicsContainer, insertAtBack: false)
+        spotlightContainer = spotlight
+        graphicsContainer = graphics
+        return (spotlight: spotlight, graphics: graphics)
+    }
 
-        let container = CALayer()
+    private func ensureContainer(root: CALayer, existing: CALayer?, insertAtBack: Bool) -> CALayer {
+        let container = existing ?? CALayer()
         container.frame = root.bounds
         container.masksToBounds = false
-        root.addSublayer(container)
-        activeContainer = container
+
+        if container.superlayer !== root {
+            container.removeFromSuperlayer()
+            if insertAtBack {
+                root.insertSublayer(container, at: 0)
+            } else {
+                root.addSublayer(container)
+            }
+        } else if insertAtBack {
+            root.insertSublayer(container, at: 0)
+        }
+
         return container
     }
 
@@ -248,6 +266,10 @@ final class DrawOverlayService {
         container: CALayer
     ) -> (CAShapeLayer, Bool) {
         if let layer = shapeLayersByKey[key] {
+            if layer.superlayer !== container {
+                layer.removeFromSuperlayer()
+                container.addSublayer(layer)
+            }
             return (layer, false)
         }
 
@@ -270,11 +292,18 @@ final class DrawOverlayService {
         }
     }
 
-    private func pruneDetachedLayers() {
-        guard let container = activeContainer else { return }
+    private func pruneDetachedLayers(containers: [CALayer]) {
+        let liveContainers = Set(containers.map(ObjectIdentifier.init))
+        guard !liveContainers.isEmpty else { return }
 
-        shapeLayersByKey = shapeLayersByKey.filter { $0.value.superlayer === container }
-        xrayLayersByKey = xrayLayersByKey.filter { $0.value.superlayer === container }
+        shapeLayersByKey = shapeLayersByKey.filter { entry in
+            guard let superlayer = entry.value.superlayer else { return false }
+            return liveContainers.contains(ObjectIdentifier(superlayer))
+        }
+        xrayLayersByKey = xrayLayersByKey.filter { entry in
+            guard let superlayer = entry.value.superlayer else { return false }
+            return liveContainers.contains(ObjectIdentifier(superlayer))
+        }
         xrayCleanupWorkItemsByKey = xrayCleanupWorkItemsByKey.filter { xrayLayersByKey[$0.key] != nil }
         attachmentByKey = attachmentByKey.filter {
             shapeLayersByKey[$0.key] != nil || xrayLayersByKey[$0.key] != nil
