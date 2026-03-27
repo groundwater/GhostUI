@@ -1661,6 +1661,9 @@ const server = Bun.serve({
           case "pointer":
             actionResult = pointerEvent({ x: cmd.x, y: cmd.y, action: cmd.action! });
             break;
+          case "pointerScroll":
+            actionResult = pointerEvent({ x: cmd.x, y: cmd.y, action: "scroll", deltaX: cmd.dx, deltaY: cmd.dy });
+            break;
           case "keyboard":
             if (nativeAX?.axPostKeyboardInput) {
               nativeAX.axPostKeyboardInput({ keys: cmd.keys, modifiers: cmd.modifiers, text: cmd.text });

@@ -125,13 +125,60 @@ function selectCandidatesByCardinality(
       return candidates.length > 0 ? [candidates[0]] : [];
     case "only":
       if (candidates.length !== 1) {
-        throw new Error(`Expected exactly one AX match, got ${candidates.length}`);
+        throw new Error(formatCardinalityMismatch(candidates));
       }
       return candidates;
     case "all":
     case "each":
       return candidates;
   }
+}
+
+function formatCardinalityMismatch(candidates: SelectedCandidate[]): string {
+  if (candidates.length === 0) {
+    return "Expected exactly one AX match, got 0";
+  }
+
+  const lines = [`Expected exactly one AX match, got ${candidates.length}. Candidates:`];
+  const preview = candidates.slice(0, 8);
+  for (const candidate of preview) {
+    lines.push(`- id=${formatCandidateId(candidate.node)} path=${formatCandidatePath(candidate)}`);
+  }
+  if (candidates.length > preview.length) {
+    lines.push(`- ... ${candidates.length - preview.length} more`);
+  }
+  return lines.join("\n");
+}
+
+function formatCandidateId(node: PlainNode): string {
+  const value = [
+    node._id,
+    node.id,
+    node.identifier,
+    node.title,
+    node.label,
+    node._text,
+  ].find((candidate) => typeof candidate === "string" && candidate.trim().length > 0);
+  return value ? JSON.stringify(value) : '"(no-id)"';
+}
+
+function formatCandidatePath(candidate: SelectedCandidate): string {
+  return [...candidate.path, candidate.node]
+    .map(formatCandidatePathSegment)
+    .join(" > ");
+}
+
+function formatCandidatePathSegment(node: PlainNode): string {
+  const display = [
+    node._id,
+    node.id,
+    node.identifier,
+    node.title,
+    node.label,
+    node.bundleId,
+    node._text,
+  ].find((candidate) => typeof candidate === "string" && candidate.trim().length > 0);
+  return display ? `${node._tag}#${display}` : node._tag;
 }
 
 /**

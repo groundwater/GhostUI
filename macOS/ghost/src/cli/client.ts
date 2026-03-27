@@ -757,6 +757,8 @@ export async function postAction(body: {
   axRole?: string;
   x?: number;
   y?: number;
+  dx?: number;
+  dy?: number;
 }): Promise<{ ok: boolean; error?: string; followUp?: string }> {
   const res = await daemonFetch(`${BASE}/api/action`, {
     method: "POST",

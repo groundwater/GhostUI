@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { fetchTree, fetchCRDTTree, fetchLiveQuery, postScanOverlay, postDrawOverlay, postKeyboardInput, switchApp, focusWindow, dragWindow, fetchFilteredCGWindows, findCGWindowAt, fetchRawWorkspaceApps, fetchRawWorkspaceFrontmost, fetchLogs, openLogStream, fetchScreen, fetchLeases, openEventStream, killActor, listActors, postRecFilmstrip, postRecImage, runActor, spawnActor, postCgMove, postCgClick, postCgDoubleClick, postCgDrag, postCgScroll, postCgKeyDown, postCgKeyUp, postCgModDown, postCgModUp, fetchCgMousePos, fetchCgMouseState, fetchVatMounts, fetchVatQuery, fetchVatTree, openVatWatchStream, postVatMount, deleteVatMount, postVatPolicy, VatMountRequestError } from "./client.js";
+import { fetchTree, fetchCRDTTree, fetchLiveQuery, postScanOverlay, postDrawOverlay, postKeyboardInput, postAction, switchApp, focusWindow, dragWindow, fetchFilteredCGWindows, findCGWindowAt, fetchRawWorkspaceApps, fetchRawWorkspaceFrontmost, fetchLogs, openLogStream, fetchScreen, fetchLeases, openEventStream, killActor, listActors, postRecFilmstrip, postRecImage, runActor, spawnActor, postCgMove, postCgClick, postCgDoubleClick, postCgDrag, postCgScroll, postCgKeyDown, postCgKeyUp, postCgModDown, postCgModUp, fetchCgMousePos, fetchCgMouseState, fetchVatMounts, fetchVatQuery, fetchVatTree, openVatWatchStream, postVatMount, deleteVatMount, postVatPolicy, VatMountRequestError } from "./client.js";
 import { parseQuery } from "./query.js";
 import { filterTree, bfsFirst, collectObscuredApps, findMatchedNode, OBSCURED_THRESHOLD, matchTree } from "./filter.js";
 import { toGUIML } from "./guiml.js";
@@ -1292,6 +1292,63 @@ async function readAXTargetArgOrStdin(action: string, value: string, usageLabel:
   } catch {
     throw new Error(stdinOnlyAXActionMessage(action));
   }
+}
+
+function looksLikeAXPayloadArg(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed === "-" || trimmed.startsWith("{") || trimmed.startsWith("[");
+}
+
+function normalizeIntentTargetType(role: string): string {
+  return role.startsWith("AX") && role.length > 2 ? role.slice(2) : role;
+}
+
+function buildIntentTargetId(target: AXTarget): string {
+  const identifier = target.identifier?.trim();
+  if (identifier) {
+    return identifier;
+  }
+  const label = target.title?.trim() || target.label?.trim() || "";
+  return `${normalizeIntentTargetType(target.role)}:${label}:0`;
+}
+
+function resolveWorkspaceBundleIdForTarget(target: AXTarget, apps: WorkspaceAppCandidate[]): string | null {
+  const app = apps.find((candidate) => candidate.pid === target.pid && candidate.bundleId?.trim());
+  return app?.bundleId?.trim() ?? null;
+}
+
+type IntentActionOptions = {
+  value?: string;
+  dx?: number;
+  dy?: number;
+};
+
+export async function dispatchIntentTargetAction(
+  target: AXTarget,
+  action: "focus" | "press" | "type" | "scroll",
+  options: IntentActionOptions = {},
+): Promise<boolean> {
+  const bundleId = resolveWorkspaceBundleIdForTarget(target, await fetchRawWorkspaceApps());
+  if (!bundleId) {
+    return false;
+  }
+
+  const result = await postAction({
+    app: bundleId,
+    type: normalizeIntentTargetType(target.role),
+    id: buildIntentTargetId(target),
+    action,
+    ...(options.value !== undefined ? { value: options.value } : {}),
+    ...(options.dx !== undefined ? { dx: options.dx } : {}),
+    ...(options.dy !== undefined ? { dy: options.dy } : {}),
+    axRole: target.role,
+    x: target.point.x,
+    y: target.point.y,
+  });
+  if (!result.ok) {
+    throw new Error(result.error || `Intent action ${action} failed`);
+  }
+  return true;
 }
 
 function parsePointerButtonFlag(args: string[], usageTopic: string): PointerButton | undefined {
@@ -2677,7 +2734,9 @@ async function main() {
         }
         try {
           const target = await readAXTargetArgOrStdin("click", args[1]!, "click");
-          await axClickTarget(target);
+          if (!(await dispatchIntentTargetAction(target, "press"))) {
+            await axClickTarget(target);
+          }
           console.error(`ok — clicked ${describeAXTarget(target)}`);
           break;
         } catch (error) {
@@ -2707,7 +2766,9 @@ async function main() {
         }
         try {
           const target = await readAXTargetArgOrStdin("scroll", targetArg, "scroll");
-          await postCgScroll(target.point.x, target.point.y, dx, dy);
+          if (!(await dispatchIntentTargetAction(target, "scroll", { dx, dy }))) {
+            await postCgScroll(target.point.x, target.point.y, dx, dy);
+          }
           console.error(`ok — scrolled ${describeAXTarget(target)}`);
           break;
         } catch (error) {
@@ -2720,7 +2781,22 @@ async function main() {
           failUsage("shortcut");
         }
         try {
-          await sendKeyboardInputSpec(args.slice(1).join(" "));
+          const shortcutArgs = args.slice(1);
+          if (shortcutArgs.length >= 2 && looksLikeAXPayloadArg(shortcutArgs[0]!)) {
+            const input = parseAXScopePayload(
+              shortcutArgs[0] === "-"
+                ? await readStdinText("shortcut")
+                : shortcutArgs[0]!,
+              "gui shortcut",
+            );
+            const focusTarget = input.kind === "cursor" ? input.cursor.target : input.target;
+            if (!(await dispatchIntentTargetAction(focusTarget, "focus"))) {
+              await axFocusTarget(focusTarget);
+            }
+            await sendKeyboardInputSpec(shortcutArgs.slice(1).join(" "));
+          } else {
+            await sendKeyboardInputSpec(shortcutArgs.join(" "));
+          }
           console.error("ok");
           break;
         } catch (error) {
@@ -2739,16 +2815,21 @@ async function main() {
         try {
           if (targetArg === "-" && !process.stdin.isTTY) {
             const input = parseAXScopePayload(await readStdinText("type"), "gui type");
-            if (input.kind === "cursor") {
-              await axTypeCursor(typeValue, input.cursor);
-            } else {
-              await axTypeTarget(typeValue, input.target);
+            const semanticTarget = input.kind === "cursor" ? input.cursor.target : input.target;
+            if (!(await dispatchIntentTargetAction(semanticTarget, "type", { value: typeValue }))) {
+              if (input.kind === "cursor") {
+                await axTypeCursor(typeValue, input.cursor);
+              } else {
+                await axTypeTarget(typeValue, input.target);
+              }
             }
             console.error(`ok — typed into ${describeAXTarget(input.target)}`);
             break;
           }
           const target = await readAXTargetArgOrStdin("type", targetArg, "type");
-          await axTypeTarget(typeValue, target);
+          if (!(await dispatchIntentTargetAction(target, "type", { value: typeValue }))) {
+            await axTypeTarget(typeValue, target);
+          }
           console.error(`ok — typed into ${describeAXTarget(target)}`);
           break;
         } catch (error) {

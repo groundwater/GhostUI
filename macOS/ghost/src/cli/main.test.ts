@@ -65,6 +65,7 @@ import {
   collectRegularWorkspaceAppPids,
   collectVisibleWorkspaceAppPids,
   extractAXQueryAppFilter,
+  dispatchIntentTargetAction,
   renderActorRunUsage,
   renderAXQueryMatches,
   resolveAXQueryAppFilterScope,
@@ -193,6 +194,120 @@ describe("keyboard input parsing", () => {
 
   test("rejects modifier-only combos", () => {
     expect(() => parseKeyboardInputSpec("cmd+shift")).toThrow("No key specified in combo (only modifiers found)");
+  });
+});
+
+describe("intent action routing", () => {
+  const target: AXTarget = {
+    type: "ax.target",
+    pid: 4321,
+    point: { x: 640, y: 360 },
+    bounds: { x: 600, y: 320, width: 80, height: 40 },
+    role: "AXButton",
+    title: "Save",
+    label: null,
+    identifier: "save-button",
+  };
+
+  test("routes semantic press actions through /api/action", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.endsWith("/api/raw/ws/apps")) {
+        return new Response(JSON.stringify([{ pid: 4321, bundleId: "com.example.SaveApp", name: "SaveApp" }]), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/action")) {
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("unexpected fetch", { status: 500 });
+    }) as unknown as typeof fetch;
+
+    try {
+      __setDaemonAuthSecretReaderForTests(async () => null);
+      resetDaemonAuthSecretCache();
+      expect(await dispatchIntentTargetAction(target, "press")).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+      __setDaemonAuthSecretReaderForTests();
+      resetDaemonAuthSecretCache();
+    }
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.url).toBe("http://localhost:7861/api/action");
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({
+      app: "com.example.SaveApp",
+      type: "Button",
+      id: "save-button",
+      action: "press",
+      axRole: "AXButton",
+      x: 640,
+      y: 360,
+    });
+  });
+
+  test("includes scroll deltas in semantic scroll actions", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.endsWith("/api/raw/ws/apps")) {
+        return new Response(JSON.stringify([{ pid: 4321, bundleId: "com.example.SaveApp", name: "SaveApp" }]), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/action")) {
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("unexpected fetch", { status: 500 });
+    }) as unknown as typeof fetch;
+
+    try {
+      __setDaemonAuthSecretReaderForTests(async () => null);
+      resetDaemonAuthSecretCache();
+      expect(await dispatchIntentTargetAction(target, "scroll", { dx: 0, dy: -240 })).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+      __setDaemonAuthSecretReaderForTests();
+      resetDaemonAuthSecretCache();
+    }
+
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({
+      app: "com.example.SaveApp",
+      type: "Button",
+      id: "save-button",
+      action: "scroll",
+      dx: 0,
+      dy: -240,
+      axRole: "AXButton",
+      x: 640,
+      y: 360,
+    });
+  });
+
+  test("returns false when no mounted workspace app can own the target", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify([]), {
+      headers: { "content-type": "application/json" },
+    })) as unknown as typeof fetch;
+
+    try {
+      __setDaemonAuthSecretReaderForTests(async () => null);
+      resetDaemonAuthSecretCache();
+      expect(await dispatchIntentTargetAction(target, "type", { value: "Ada" })).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+      __setDaemonAuthSecretReaderForTests();
+      resetDaemonAuthSecretCache();
+    }
   });
 });
 

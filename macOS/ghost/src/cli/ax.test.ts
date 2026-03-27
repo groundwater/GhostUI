@@ -393,7 +393,7 @@ describe("formatAXQueryGuiml", () => {
   });
 
   test("only rejects multiple matches", () => {
-    expect(() => formatAXQueryGuiml(tree, "Button", "only")).toThrow("Expected exactly one AX match, got 2");
+    expect(() => formatAXQueryGuiml(tree, "Button", "only")).toThrow("Expected exactly one AX match, got 2. Candidates:");
   });
 
   test("all renders one merged GUIML tree for all matches", () => {

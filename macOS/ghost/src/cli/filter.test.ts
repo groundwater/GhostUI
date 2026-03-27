@@ -801,6 +801,33 @@ describe("filterTree — nth-child slicing", () => {
   });
 });
 
+describe("filterTree — only cardinality errors", () => {
+  test("includes candidate ids and paths for ambiguous matches", () => {
+    const tree: PlainNode = {
+      _tag: "Application",
+      _id: "app:com.example.Codex",
+      title: "Codex",
+      _children: [
+        {
+          _tag: "Window",
+          _id: "Window:Main:0",
+          title: "Main",
+          _children: [
+            { _tag: "Button", _id: "Button:Save:0", title: "Save" },
+            { _tag: "Button", _id: "Button:Save As:1", title: "Save As" },
+          ],
+        },
+      ],
+    };
+
+    expect(() => selectForestMatchesWithCardinality([tree], parseQuery("Button"), "only")).toThrow(
+      `Expected exactly one AX match, got 2. Candidates:
+- id=\"Button:Save:0\" path=Application#app:com.example.Codex > Window#Window:Main:0 > Button#Button:Save:0
+- id=\"Button:Save As:1\" path=Application#app:com.example.Codex > Window#Window:Main:0 > Button#Button:Save As:1`,
+    );
+  });
+});
+
 // ─── Window visibility ───────────────────────────────────────────
 
 describe("filterTree — window visibility", () => {

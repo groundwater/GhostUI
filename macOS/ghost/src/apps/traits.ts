@@ -33,6 +33,8 @@ export interface ActionTarget {
   axRole?: string; // original AX role, e.g. "AXPopUpButton" when schema type differs
   x?: number;      // center x coordinate (for pointer-based actions like rightclick)
   y?: number;      // center y coordinate (for pointer-based actions like rightclick)
+  dx?: number;     // scroll delta x for semantic scroll actions
+  dy?: number;     // scroll delta y for semantic scroll actions
 }
 
 // ── Action command: daemon → GhostUI Swift ──
@@ -43,6 +45,7 @@ export type ActionCommand =
   | { method: "axSetValue"; label?: string; role?: string; value: string; nth?: number; parent?: string }
   | { method: "axTypeValue"; label?: string; role?: string; value: string; nth?: number; parent?: string }
   | { method: "pointer"; x: number; y: number; action: "click" | "rightClick" }
+  | { method: "pointerScroll"; x: number; y: number; dx: number; dy: number }
   | { method: "keyboard"; keys?: string[]; modifiers?: string[]; text?: string }
 
 // ── Node type → AX role mapping ──
@@ -139,6 +142,9 @@ export function defaultResolveAction(target: ActionTarget): ActionCommand | null
       return { method: "axTypeValue", label: label || undefined, role, value: target.value, ...(nth !== undefined && !label ? { nth } : {}) };
     case "contextMenu":
       return { method: "axAction", label, role, action: "AXShowMenu", ...(nth !== undefined && !label ? { nth } : {}) };
+    case "scroll":
+      if (target.x == null || target.y == null || target.dx == null || target.dy == null) return null;
+      return { method: "pointerScroll", x: target.x, y: target.y, dx: target.dx, dy: target.dy };
     default:
       return null;
   }
