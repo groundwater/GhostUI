@@ -30,7 +30,7 @@ import {
 } from "./payload.js";
 import type { CLICompositionPayload } from "./payload.js";
 import { normalizeCssColorString, normalizeDrawScriptText } from "../overlay/draw.js";
-import type { DrawMarkerShape, DrawScript } from "../overlay/draw.js";
+import type { DrawMarkerShape, DrawScript, DrawXrayDirection } from "../overlay/draw.js";
 import { waitForDrawOverlayAttachment } from "./draw-stream.js";
 import { axTargetFromPoint, isAXTarget } from "../a11y/ax-target.js";
 import {
@@ -1750,6 +1750,7 @@ export const DEFAULT_GFX_MARKER_SIZE = 4;
 export const DEFAULT_GFX_MARKER_PADDING = 0;
 export const DEFAULT_GFX_MARKER_ROUGHNESS = 0.2;
 export type GfxScanDirection = "top-to-bottom" | "left-to-right";
+export type GfxXrayDirection = "top-to-bottom" | "left-to-right" | "right-to-left" | "bottom-to-top";
 export type GfxOutlineTransition = "fade" | "pop" | "draw";
 export type GfxArrowTarget =
   | "center"
@@ -1783,6 +1784,18 @@ export interface GfxScanOptions {
   durationMs: number;
   direction: GfxScanDirection;
 }
+
+export interface GfxXrayOptions {
+  durationMs: number;
+  direction: GfxXrayDirection;
+}
+
+const GFX_XRAY_DIRECTION_TO_DRAW_DIRECTION: Record<GfxXrayDirection, DrawXrayDirection> = {
+  "top-to-bottom": "topToBottom",
+  "left-to-right": "leftToRight",
+  "right-to-left": "rightToLeft",
+  "bottom-to-top": "bottomToTop",
+};
 
 function normalizeHighlightRect(value: unknown): CLICompositionRect | null {
   if (typeof value === "string") {
@@ -2174,6 +2187,7 @@ export function buildGfxOutlineDrawScriptFromText(
 export function buildGfxXrayDrawScriptFromText(
   input: string,
   durationMs = DEFAULT_GFX_XRAY_DURATION_MS,
+  direction: GfxXrayDirection = "left-to-right",
 ): DrawScript {
   const rects = resolveGfxRectsFromText(input, "gui gfx xray -");
   return {
@@ -2181,7 +2195,7 @@ export function buildGfxXrayDrawScriptFromText(
     items: rects.map((rect) => ({
       kind: "xray" as const,
       rect,
-      direction: "leftToRight" as const,
+      direction: GFX_XRAY_DIRECTION_TO_DRAW_DIRECTION[direction],
       animation: { durMs: durationMs, ease: "easeInOut" as const },
     })),
   };
@@ -2514,6 +2528,35 @@ export function parseGfxScanOptions(
     const value = argv[index + 1];
     if (value !== "top-to-bottom" && value !== "left-to-right") {
       failUsage(usageTopic, "--direction must be one of: top-to-bottom, left-to-right");
+    }
+    direction = value;
+    argv.splice(index, 2);
+    index--;
+  }
+  return { durationMs, direction };
+}
+
+export function parseGfxXrayOptions(
+  argv: string[],
+  usageTopic: string,
+): GfxXrayOptions {
+  const durationMs = parseGfxDuration(argv, usageTopic, DEFAULT_GFX_XRAY_DURATION_MS);
+  let direction: GfxXrayDirection = "left-to-right";
+  for (let index = 0; index < argv.length; index++) {
+    if (argv[index] !== "--direction") {
+      continue;
+    }
+    const value = argv[index + 1];
+    if (
+      value !== "top-to-bottom"
+      && value !== "left-to-right"
+      && value !== "right-to-left"
+      && value !== "bottom-to-top"
+    ) {
+      failUsage(
+        usageTopic,
+        "--direction must be one of: top-to-bottom, left-to-right, right-to-left, bottom-to-top",
+      );
     }
     direction = value;
     argv.splice(index, 2);
@@ -3145,12 +3188,12 @@ async function main() {
             break;
           }
           case "xray": {
-            const durationMs = parseGfxDuration(gfxArgs, "gfx xray", DEFAULT_GFX_XRAY_DURATION_MS);
+            const xrayOptions = parseGfxXrayOptions(gfxArgs, "gfx xray");
             if (gfxArgs.length !== 1 || gfxArgs[0] !== "-") {
               failUsage("gfx xray");
             }
             const input = await readFirstJSONFrame(Bun.stdin.stream());
-            await attachDrawOverlay(buildGfxXrayDrawScriptFromText(input, durationMs));
+            await attachDrawOverlay(buildGfxXrayDrawScriptFromText(input, xrayOptions.durationMs, xrayOptions.direction));
             emitPassthroughStdout(input, process.stdout.isTTY);
             break;
           }

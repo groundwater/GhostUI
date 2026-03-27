@@ -77,6 +77,7 @@ import {
   parseGfxDuration,
   parseGfxOutlineOptions,
   parseGfxScanOptions,
+  parseGfxXrayOptions,
   parseGfxSpotlightOptions,
   parseGfxMarkerOptions,
   parseActorKillTargetsFromText,
@@ -1744,23 +1745,31 @@ describe("gfx payload bridges", () => {
       ],
     };
 
-    expect(buildGfxXrayDrawScriptFromText(formatVatQueryOutput(tree, "Window[frame]", false))).toEqual({
-      coordinateSpace: "screen",
-      items: [
-        {
-          kind: "xray",
-          rect: { x: 40, y: 50, width: 300, height: 200 },
-          direction: "leftToRight",
-          animation: { durMs: DEFAULT_GFX_XRAY_DURATION_MS, ease: "easeInOut" },
-        },
-        {
-          kind: "xray",
-          rect: { x: 400, y: 50, width: 320, height: 220 },
-          direction: "leftToRight",
-          animation: { durMs: DEFAULT_GFX_XRAY_DURATION_MS, ease: "easeInOut" },
-        },
-      ],
-    });
+    const payloadText = formatVatQueryOutput(tree, "Window[frame]", false);
+    for (const [direction, nativeDirection] of [
+      ["top-to-bottom", "topToBottom"],
+      ["left-to-right", "leftToRight"],
+      ["right-to-left", "rightToLeft"],
+      ["bottom-to-top", "bottomToTop"],
+    ] as const) {
+      expect(buildGfxXrayDrawScriptFromText(payloadText, DEFAULT_GFX_XRAY_DURATION_MS, direction)).toEqual({
+        coordinateSpace: "screen",
+        items: [
+          {
+            kind: "xray",
+            rect: { x: 40, y: 50, width: 300, height: 200 },
+            direction: nativeDirection,
+            animation: { durMs: DEFAULT_GFX_XRAY_DURATION_MS, ease: "easeInOut" },
+          },
+          {
+            kind: "xray",
+            rect: { x: 400, y: 50, width: 320, height: 220 },
+            direction: nativeDirection,
+            animation: { durMs: DEFAULT_GFX_XRAY_DURATION_MS, ease: "easeInOut" },
+          },
+        ],
+      });
+    }
   });
 
   test("builds gfx spotlight draw scripts from the union of resolved rects", () => {
@@ -2080,6 +2089,24 @@ describe("gfx payload bridges", () => {
     const args = ["--duration", "900", "--direction", "left-to-right", "-"];
     expect(parseGfxScanOptions(args, "gfx scan")).toEqual({
       durationMs: 900,
+      direction: "left-to-right",
+    });
+    expect(args).toEqual(["-"]);
+  });
+
+  test("parses gfx xray options and strips consumed flags", () => {
+    const args = ["--duration", "900", "--direction", "bottom-to-top", "-"];
+    expect(parseGfxXrayOptions(args, "gfx xray")).toEqual({
+      durationMs: 900,
+      direction: "bottom-to-top",
+    });
+    expect(args).toEqual(["-"]);
+  });
+
+  test("parses gfx xray options with the default left-to-right direction", () => {
+    const args = ["-"];
+    expect(parseGfxXrayOptions(args, "gfx xray")).toEqual({
+      durationMs: DEFAULT_GFX_XRAY_DURATION_MS,
       direction: "left-to-right",
     });
     expect(args).toEqual(["-"]);

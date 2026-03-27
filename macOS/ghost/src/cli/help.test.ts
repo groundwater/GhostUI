@@ -184,7 +184,7 @@ describe("cli help rendering", () => {
 
     expect(help).toContain("gui gfx outline [--color <css-color>] [--size <pixels>] [--transition <fade|pop|draw>] [--fill <css-color>] [--duration <milliseconds>] -");
     expect(help).toContain("gui gfx scan [--duration <milliseconds>] [--direction <top-to-bottom|left-to-right>] -");
-    expect(help).toContain("gui gfx xray [--duration <milliseconds>] -");
+    expect(help).toContain("gui gfx xray [--duration <milliseconds>] [--direction <top-to-bottom|left-to-right|right-to-left|bottom-to-top>] -");
     expect(help).toContain("gui gfx spotlight [--color <css-color>] [--duration <milliseconds>] -");
     expect(help).toContain("gui gfx arrow [--color <css-color>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--target <anchor>] [--from <x> <y>] -");
     expect(help).toContain("gui gfx draw <shape> <x y width height | -> [--padding <pixels>] [--size <points>] [--color <css-color>] [--duration <milliseconds>] [--roughness <0..1>]");
@@ -193,6 +193,7 @@ describe("cli help rendering", () => {
     expect(help).toContain("every leaf node with frame coordinates contributes a rect");
     expect(help).toContain("`outline` accepts --color, --size, optional --fill, --duration, and --transition with fade, pop, or draw");
     expect(help).toContain("emits one payload per crossed element in scan order");
+    expect(help).toContain("`xray` uses the same AX/VAT bounds as outline and scan, defaults to a left-to-right sweep, and accepts all four cardinal directions");
     expect(help).toContain("dims the complement outside that union");
     expect(help).toContain("`spotlight` accepts --color and --duration, defaults to color `rgba(0,0,0,.5)`, and uses 1200ms");
     expect(help).toContain("defaults to color `#FF3B30`, size `6`, length `100`, duration `400`, and target `center`");
