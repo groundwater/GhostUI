@@ -2,60 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { handleStatic } from "./static.js";
 import { handleCLI } from "./cli.js";
 import { createDaemonAuthContext, isProtectedDaemonPath } from "./auth.js";
-import { DEFAULT_DOC_PATH } from "../crdt/doc-paths.js";
-import * as Y from "yjs";
-
-function makeStore(paths: string[] = []): {
-  get(path: string): Y.Doc | undefined;
-  getOrCreate(path: string): Y.Doc;
-  paths(): string[];
-} {
-  const docs = new Map<string, Y.Doc>();
-  for (const path of paths) docs.set(path, new Y.Doc());
-  return {
-    get(path: string) {
-      return docs.get(path);
-    },
-    getOrCreate(path: string) {
-      let doc = docs.get(path);
-      if (!doc) {
-        doc = new Y.Doc();
-        docs.set(path, doc);
-      }
-      return doc;
-    },
-    paths() {
-      return [...docs.keys()];
-    },
-  };
-}
 
 describe("display route cleanup", () => {
-  test("root redirects to /display/0", () => {
+  test("root no longer serves a browser display entrypoint", () => {
     const res = handleStatic(new Request("http://localhost:7861/"));
-    expect(res).not.toBeNull();
-    expect(res!.status).toBe(302);
-    expect(res!.headers.get("location")).toBe("/display/0");
-  });
-});
-
-describe("CLI doc path defaults", () => {
-  test("tree defaults strictly to /display/0", async () => {
-    const store = makeStore(["/other"]);
-
-    const res = handleCLI(new Request("http://localhost:7861/cli/tree"), store as never) as Response;
-    expect(res.status).toBe(404);
-    expect(await res.text()).toContain(DEFAULT_DOC_PATH);
+    expect(res).toBeNull();
   });
 });
 
 describe("daemon auth", () => {
-  test("protects CLI and operator API routes but leaves icon and websocket paths open", () => {
-    expect(isProtectedDaemonPath("/cli/tree")).toBe(true);
+  test("protects CLI and operator API routes but leaves icon paths open", () => {
+    expect(isProtectedDaemonPath("/cli/log")).toBe(true);
     expect(isProtectedDaemonPath("/api/trigger")).toBe(true);
     expect(isProtectedDaemonPath("/api/icon")).toBe(false);
     expect(isProtectedDaemonPath("/api/display/list")).toBe(true);
-    expect(isProtectedDaemonPath("/crdt")).toBe(false);
   });
 
   test("stays open when no daemon auth secret is configured", () => {

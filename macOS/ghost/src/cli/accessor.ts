@@ -2,7 +2,7 @@ import type { PlainNode, NodeAccessor } from "./types.js";
 import type { AXNode } from "./ax.js";
 import { displayId } from "./filter.js";
 
-/** Accessor for CRDT PlainNode trees. */
+/** Accessor for daemon-backed PlainNode trees. */
 export const plainNodeAccessor: NodeAccessor<PlainNode> = {
   tag: (n) => n._tag,
   children: (n) => n._children,

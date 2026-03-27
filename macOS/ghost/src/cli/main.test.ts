@@ -70,7 +70,6 @@ import {
   renderAXQueryMatches,
   resolveAXQueryAppFilterScope,
   resolveCommandAlias,
-  resolveCRDTSubcommandAlias,
   summarizeVatWatchChanges,
   shouldEmitPassthroughStdout,
   formatVatMountError,
@@ -171,10 +170,6 @@ describe("command alias resolution", () => {
     expect(resolveCommandAlias("query")).toBe("query");
   });
 
-  test("maps the crdt q alias to query", () => {
-    expect(resolveCRDTSubcommandAlias("q")).toBe("query");
-    expect(resolveCRDTSubcommandAlias("query")).toBe("query");
-  });
 });
 
 describe("keyboard input parsing", () => {

@@ -4,7 +4,6 @@ import { CRDTStore } from "./crdt/store.js";
 import { handleCLI } from "./server/cli.js";
 import { handleVAT } from "./server/vat.js";
 import { handleStatic } from "./server/static.js";
-import { handleWSUpgrade, wsHandlers, setupDocBroadcast } from "./server/ws.js";
 import { configureRefresherRuntime, startRefresher, type TreeNode, type Refresher, pruneAppByBundleId } from "./a11y/refresher.js";
 import { defaultResolveAction, defaultFollowUp, type ActionTarget, type ActionCommand } from "./apps/traits.js";
 import { getBundle } from "./apps/registry.js";
@@ -19,7 +18,6 @@ import {
 } from "./a11y/native-ax.js";
 import { createDaemonAuthContext } from "./server/auth.js";
 import { buildLazyTree } from "./a11y/live-tree.js";
-import { ensureDisplayUIBuild } from "./build/display-ui.js";
 import { parseQuery } from "./cli/query.js";
 import { filterTree, bfsFirst } from "./cli/filter.js";
 import { DEFAULT_DOC_PATH, windowDocPath } from "./crdt/doc-paths.js";
@@ -694,8 +692,6 @@ function clampWindowGrabOffset(rect: WindowFocusRect, grabOffsetX: number, grabO
   };
 }
 
-await ensureDisplayUIBuild();
-
 function _ts() {
   const d = new Date();
   return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`;
@@ -794,9 +790,6 @@ for (const fp of [FIXTURE_PATH, FIXTURE_ALT]) {
     }
   }
 }
-
-// Setup broadcast for existing docs
-setupDocBroadcast(store);
 
 let activeRefresher: Refresher | null = null;
 let foregroundFillTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1124,10 +1117,7 @@ const auth = createDaemonAuthContext();
 const server = Bun.serve({
   port: PORT,
   idleTimeout: 0,
-  async fetch(req, server) {
-    // WebSocket upgrade
-    if (handleWSUpgrade(req, server, store)) return;
-
+  async fetch(req) {
     const url = new URL(req.url);
     const authResponse = auth.authorize(req, url);
     if (authResponse) return authResponse;
@@ -1787,40 +1777,6 @@ const server = Bun.serve({
       });
     }
 
-    if (url.pathname === "/api/raw/leases") {
-      const doc = store.get(DEFAULT_DOC_PATH);
-      if (!doc) {
-        return new Response(JSON.stringify({}), {
-          headers: { "content-type": "application/json", "access-control-allow-origin": "*" },
-        });
-      }
-      const root = doc.getMap("root");
-      const leaseState = readWindowLeaseState(root);
-      const now = Date.now();
-      const annotated: Record<string, unknown> = {};
-      if (leaseState.focus) {
-        annotated.focus = {
-          ...leaseState.focus,
-          remainingMs: Math.max(0, leaseState.focus.expiresAt - now),
-          expired: leaseState.focus.expiresAt <= now,
-        };
-      }
-      if (leaseState.positions) {
-        const positions: Record<string, unknown> = {};
-        for (const [key, lease] of Object.entries(leaseState.positions)) {
-          positions[key] = {
-            ...lease,
-            remainingMs: Math.max(0, lease.expiresAt - now),
-            expired: lease.expiresAt <= now,
-          };
-        }
-        annotated.positions = positions;
-      }
-      return new Response(JSON.stringify(annotated, null, 2), {
-        headers: { "content-type": "application/json", "access-control-allow-origin": "*" },
-      });
-    }
-
     if (url.pathname === "/api/raw/events") {
       const encoder = new TextEncoder();
       const stream = new ReadableStream({
@@ -2161,12 +2117,11 @@ const server = Bun.serve({
     });
     if (vatRes) return vatRes;
 
-    const cliRes = handleCLI(req, store);
+    const cliRes = handleCLI(req);
     if (cliRes) return cliRes;
 
     return new Response("Not found", { status: 404 });
   },
-  websocket: wsHandlers,
 });
 
 _log("daemon", `listening on http://localhost:${PORT}`);

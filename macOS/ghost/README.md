@@ -6,7 +6,7 @@ TypeScript runtime for the GhostUI daemon.
 
 - `src/daemon.ts` starts the daemon process.
 - `src/cli/` contains the `gui` CLI implementation.
-- `src/server/` serves HTTP routes, display assets, and sockets.
+- `src/server/` serves HTTP routes and operator endpoints.
 - `native/` contains the macOS native AX module.
 
 ## Run From The Repo Root
