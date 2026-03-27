@@ -94,9 +94,11 @@ describe("cli help rendering", () => {
     expect(help).toContain("gui vat mount /demo fixed hello world");
     expect(help).toContain("gui vat mount /demo a11y 'Application#com.apple.TextEdit { Window }'");
     expect(help).toContain("gui vat mount /demo live 'Application#com.apple.TextEdit { Window }'");
+    expect(help).toContain("gui vat mount /System/Dock dock");
     expect(help).toContain("gui vat unmount /demo");
     expect(help).toContain("The a11y driver snapshots raw accessibility trees with a GUIML query");
     expect(help).toContain("The live driver preserves the previous processed live-tree prototype under an honest name.");
+    expect(help).toContain("The dock driver snapshots com.apple.dock");
     expect(help).toContain("The mounted path becomes the wrapper tag in the printed GUIML.");
     expect(help).toContain("VAT mounts are persisted in the daemon-owned mount table.");
     expect(help).toContain("may lazily activate auto mounts");
@@ -110,9 +112,11 @@ describe("cli help rendering", () => {
     expect(help).toContain("gui vat mount /demo fixed hello world");
     expect(help).toContain("gui vat mount /demo a11y 'Application#com.apple.TextEdit { Window }'");
     expect(help).toContain("gui vat mount /demo live 'Application#com.apple.TextEdit { Window }'");
+    expect(help).toContain("gui vat mount /System/Dock dock");
     expect(help).toContain("gui vat unmount /demo");
     expect(help).toContain("The a11y driver snapshots raw accessibility trees with a GUIML query");
     expect(help).toContain("The live driver preserves the previous processed live-tree prototype under an honest name.");
+    expect(help).toContain("The dock driver snapshots com.apple.dock");
     expect(help).toContain("The mounted path becomes the wrapper tag in the printed GUIML.");
     expect(help).toContain("New mounts default to the always policy; change that with gui vat policy.");
     expect(help).toContain("smoke test");

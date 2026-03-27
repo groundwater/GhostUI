@@ -1,6 +1,7 @@
 import type { AXObserverEvent } from "../a11y/native-ax.js";
 import { buildA11yVatMountTree } from "../a11y/vat.js";
 import { buildLiveVatMountTree } from "../a11y/live-vat.js";
+import { buildDockVatMountTree } from "./dock.js";
 import { composeVatMountForest, findVatNodeByPath, vatPathSegments, wrapVatMountPath, type VatPathSegment } from "./path.js";
 import { normalizeVatMountPolicy, normalizeVatPersistedMount } from "./config.js";
 import {
@@ -52,6 +53,7 @@ const VAT_DRIVERS = new Map<string, VatDriver>([
   ["fixed", buildFixedMountTree],
   ["a11y", buildA11yVatMountTree],
   ["live", buildLiveVatMountTree],
+  ["dock", buildDockVatMountTree],
 ]);
 
 function clonePolicy(policy: VatMountPolicy): VatMountPolicy {
