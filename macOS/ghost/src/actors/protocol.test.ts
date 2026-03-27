@@ -247,6 +247,16 @@ describe("actor protocol", () => {
       },
       timeoutMs: undefined,
     });
+    expect(parseActorRunCLIArgs("encircle", ["--at", "30", "40", "--loops", "1.5"])).toEqual({
+      action: {
+        kind: "encircle",
+        center: { x: 30, y: 40 },
+        radius: 60,
+        speed: 400,
+        loops: 1,
+      },
+      timeoutMs: undefined,
+    });
 
     expect(parseActorRunCLIArgs("rect", ["--padding", "8", "--blur", "12", "-"], stdinPayload)).toEqual({
       timeoutMs: undefined,
@@ -538,6 +548,20 @@ describe("actor protocol", () => {
     });
 
     expect(normalizeActorRunRequest({ kind: "encircle", center: { x: 420, y: 240 } })).toEqual({
+      action: {
+        kind: "encircle",
+        center: { x: 420, y: 240 },
+        radius: 60,
+        loops: 1,
+        speed: 400,
+      },
+      timeoutMs: undefined,
+    });
+    expect(normalizeActorRunRequest({
+      kind: "encircle",
+      center: { x: 420, y: 240 },
+      loops: 1.5,
+    })).toEqual({
       action: {
         kind: "encircle",
         center: { x: 420, y: 240 },
@@ -861,6 +885,11 @@ describe("actor protocol", () => {
     )).toThrow("actor run text stdin mode cannot be combined with --box");
     expect(() => normalizeActorSpawnRequest({ type: "bogus", name: "pointer" })).toThrow(ActorApiError);
     expect(() => normalizeActorRunRequest({ kind: "narrate", text: "   " })).toThrow(ActorApiError);
+    expect(() => normalizeActorRunRequest({
+      kind: "encircle",
+      center: { x: 420, y: 240 },
+      loops: 0,
+    })).toThrow("loops must be greater than 0");
     expect(() => normalizeActorRunRequest({
       kind: "draw",
       shape: "check",

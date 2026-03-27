@@ -112,6 +112,14 @@ function expectPositiveNumber(value: unknown, label: string): number {
   return parsed;
 }
 
+function expectPositiveInteger(value: unknown, label: string): number {
+  const parsed = expectPositiveNumber(value, label);
+  if (!Number.isInteger(parsed)) {
+    throw new ActorApiError("invalid_args", `${label} must be a positive integer`);
+  }
+  return parsed;
+}
+
 function expectNonNegativeNumber(value: unknown, label: string): number {
   const parsed = expectFiniteNumber(value, label);
   if (parsed < 0) {
@@ -294,16 +302,23 @@ export function normalizeActorRunRequest(value: unknown): ActorRunRequest {
         },
       };
     case "encircle":
-      return {
-        timeoutMs,
-        action: {
-          kind,
-          center: normalizePoint(record.center, "center"),
-          radius: record.radius === undefined ? 60 : expectPositiveNumber(record.radius, "radius"),
-          loops: record.loops === undefined ? 1 : expectPositiveNumber(record.loops, "loops"),
-          speed: record.speed === undefined ? 400 : expectPositiveNumber(record.speed, "speed"),
-        },
-      };
+      {
+        const loops = record.loops === undefined ? 1 : Math.trunc(expectPositiveNumber(record.loops, "loops"));
+        if (loops < 1) {
+          throw new ActorApiError("invalid_args", "loops must be greater than 0");
+        }
+
+        return {
+          timeoutMs,
+          action: {
+            kind,
+            center: normalizePoint(record.center, "center"),
+            radius: record.radius === undefined ? 60 : expectPositiveNumber(record.radius, "radius"),
+            loops,
+            speed: record.speed === undefined ? 400 : expectPositiveNumber(record.speed, "speed"),
+          },
+        };
+      }
     case "dismiss":
       return { timeoutMs, action: { kind } };
     case "rect":
