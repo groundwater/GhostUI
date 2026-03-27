@@ -1008,23 +1008,63 @@ final class ActorOverlayService {
     }
 
     private func performIdlePop(_ actor: PointerActorLayer) {
-        let point = currentPosition(actor)
         actor.body.removeAnimation(forKey: "idle-pop")
+        actor.halo.removeAnimation(forKey: "idle-pop-halo")
+        actor.body.mask = nil
 
-        let pop = CAKeyframeAnimation(keyPath: "transform.scale")
-        pop.values = [1.0, 1.16, 1.0]
-        pop.keyTimes = [0, 0.45, 1]
-        pop.duration = 0.42
-        pop.timingFunctions = [CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .easeInEaseOut)]
-        actor.body.add(pop, forKey: "idle-pop")
+        // Body: reveal a transparent center that expands outward.
+        let bodyPop = CAKeyframeAnimation(keyPath: "transform.scale")
+        bodyPop.values = [1.0, 1.1, 1.0]
+        bodyPop.keyTimes = [0, 0.34, 1]
+        bodyPop.duration = 0.54
+        bodyPop.timingFunctions = [
+            CAMediaTimingFunction(name: .easeOut),
+            CAMediaTimingFunction(name: .easeInEaseOut),
+        ]
+        actor.body.add(bodyPop, forKey: "idle-pop")
 
-        addPulseRing(
-            root: actor.container,
-            point: point,
-            color: .systemBlue.withAlphaComponent(0.55),
-            scale: 2.4,
-            duration: 0.5
-        )
+        // Halo: dim while the body empties, then restore.
+        let haloFade = CAKeyframeAnimation(keyPath: "opacity")
+        haloFade.values = [0.18, 0.0, 0.18]
+        haloFade.keyTimes = [0, 0.5, 1]
+        haloFade.duration = 0.54
+        haloFade.timingFunctions = [
+            CAMediaTimingFunction(name: .easeOut),
+            CAMediaTimingFunction(name: .easeInEaseOut),
+        ]
+        actor.halo.add(haloFade, forKey: "idle-pop-halo")
+
+        let mask = CAShapeLayer()
+        mask.frame = actor.body.bounds
+        mask.fillRule = .evenOdd
+        mask.fillColor = NSColor.black.cgColor
+        let startMaskPath = idlePopMaskPath(in: actor.body.bounds, holeInset: 8.0)
+        let endMaskPath = idlePopMaskPath(in: actor.body.bounds, holeInset: -1.5)
+        mask.path = endMaskPath
+        actor.body.mask = mask
+
+        let maskAnimation = CAKeyframeAnimation(keyPath: "path")
+        maskAnimation.values = [
+            startMaskPath,
+            idlePopMaskPath(in: actor.body.bounds, holeInset: 4.0),
+            endMaskPath,
+        ]
+        maskAnimation.keyTimes = [0, 0.4, 1]
+        maskAnimation.duration = 0.54
+        maskAnimation.isRemovedOnCompletion = false
+        maskAnimation.fillMode = .forwards
+        maskAnimation.timingFunctions = [
+            CAMediaTimingFunction(name: .easeOut),
+            CAMediaTimingFunction(name: .easeInEaseOut),
+        ]
+        mask.add(maskAnimation, forKey: "idle-pop-mask")
+
+        let clearMask = DispatchWorkItem { [weak actor, weak mask] in
+            guard let actor, let mask, actor.body.mask === mask else { return }
+            actor.body.mask = nil
+        }
+        actor.cleanupItems.append(clearMask)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.54, execute: clearMask)
     }
 
     private func startNarrationAnimation(_ actor: PointerActorLayer) {
@@ -1133,6 +1173,14 @@ final class ActorOverlayService {
         group.isRemovedOnCompletion = false
         group.fillMode = .forwards
         ring.add(group, forKey: "pulse")
+    }
+
+    private func idlePopMaskPath(in bounds: CGRect, holeInset: CGFloat) -> CGPath {
+        let path = CGMutablePath()
+        path.addEllipse(in: bounds)
+        let hole = bounds.insetBy(dx: holeInset, dy: holeInset)
+        path.addEllipse(in: hole)
+        return path
     }
 
     private func makeChevron(at point: CGPoint, verticalUp: Bool? = nil, horizontalLeft: Bool? = nil) -> CAShapeLayer {
