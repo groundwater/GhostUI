@@ -43,6 +43,7 @@ export interface ActorSpawnRequest {
   type: ActorType;
   name: string;
   durationScale: number;
+  idleMs?: number;
 }
 
 export interface ActorListEntry {
@@ -57,6 +58,7 @@ export type ActorAction =
   | { kind: "scroll"; dx: number; dy: number }
   | { kind: "think"; forMs: number }
   | { kind: "narrate"; text: string }
+  | { kind: "encircle"; center: { x: number; y: number }; radius: number; loops: number; speed: number }
   | { kind: "dismiss" }
   | { kind: "draw"; shape: CanvasDrawShape; style: CanvasDrawStyle; box?: CanvasBox; boxes?: CanvasBox[] }
   | { kind: "text"; text: string; style: CanvasTextStyle; box?: CanvasBox }
@@ -224,6 +226,9 @@ export function normalizeActorSpawnRequest(value: unknown): ActorSpawnRequest {
     durationScale: record.durationScale === undefined
       ? 1
       : expectNonNegativeNumber(record.durationScale, "durationScale"),
+    idleMs: record.idleMs === undefined
+      ? 3000
+      : expectNonNegativeNumber(record.idleMs, "idleMs"),
   };
 }
 
@@ -286,6 +291,17 @@ export function normalizeActorRunRequest(value: unknown): ActorRunRequest {
         action: {
           kind,
           text: expectString(record.text, "text"),
+        },
+      };
+    case "encircle":
+      return {
+        timeoutMs,
+        action: {
+          kind,
+          center: normalizePoint(record.center, "center"),
+          radius: record.radius === undefined ? 60 : expectPositiveNumber(record.radius, "radius"),
+          loops: record.loops === undefined ? 1 : expectPositiveNumber(record.loops, "loops"),
+          speed: record.speed === undefined ? 400 : expectPositiveNumber(record.speed, "speed"),
         },
       };
     case "dismiss":
@@ -417,12 +433,26 @@ function parsePointFlag(args: string[], flag: string): { x: number; y: number } 
   };
 }
 
+function circleCenterFromBox(box: CanvasBox): { x: number; y: number } {
+  return {
+    x: box.x + box.width / 2,
+    y: box.y + box.height / 2,
+  };
+}
+
+function defaultEncircleRadius(box?: CanvasBox): number {
+  if (!box) {
+    return 60;
+  }
+  return Math.max(36, Math.round(Math.max(box.width, box.height) / 2 + 18));
+}
+
 export function parseActorSpawnCLIArgs(args: string[]): ActorSpawnRequest {
   const rest = [...args];
   const type = rest.shift();
   const name = rest.shift();
   if (!type || !name) {
-    throw new ActorApiError("invalid_args", "Usage: gui actor spawn <pointer|canvas|spotlight> <name> [--duration-scale <scale>]");
+    throw new ActorApiError("invalid_args", "Usage: gui actor spawn <pointer|canvas|spotlight> <name> [--duration-scale <scale>] [--idle <ms>]");
   }
 
   let durationScale = 1;
@@ -430,6 +460,13 @@ export function parseActorSpawnCLIArgs(args: string[]): ActorSpawnRequest {
   if (durationIndex >= 0) {
     durationScale = expectNonNegativeNumber(Number(requireOptionValue(rest, durationIndex, "--duration-scale")), "--duration-scale");
     rest.splice(durationIndex, 2);
+  }
+
+  let idleMs = 3000;
+  const idleIndex = rest.indexOf("--idle");
+  if (idleIndex >= 0) {
+    idleMs = expectNonNegativeNumber(Number(requireOptionValue(rest, idleIndex, "--idle")), "--idle");
+    rest.splice(idleIndex, 2);
   }
 
   if (rest.length > 0) {
@@ -440,6 +477,7 @@ export function parseActorSpawnCLIArgs(args: string[]): ActorSpawnRequest {
     type: expectActorType(type),
     name: expectActorName(name),
     durationScale,
+    idleMs,
   };
 }
 
@@ -687,6 +725,67 @@ export function parseActorRunCLIArgs(actionName: string, args: string[], stdinTe
         throw new ActorApiError("invalid_args", `Unknown narrate args: ${rest.join(" ")}`);
       }
       return { timeoutMs, action: { kind: "narrate", text } };
+    }
+    case "encircle": {
+      const stdinIndex = rest.indexOf("-");
+      const useStdin = stdinIndex >= 0;
+      if (useStdin) {
+        rest.splice(stdinIndex, 1);
+      }
+
+      let center: { x: number; y: number } | undefined;
+      if (rest.includes("--at")) {
+        center = parsePointFlag(rest, "--at");
+      }
+
+      let radius: number | undefined;
+      const radiusIndex = rest.indexOf("--radius");
+      if (radiusIndex >= 0) {
+        radius = expectPositiveNumber(Number(requireOptionValue(rest, radiusIndex, "--radius")), "--radius");
+        rest.splice(radiusIndex, 2);
+      }
+
+      let speed = 400;
+      const speedIndex = rest.indexOf("--speed");
+      if (speedIndex >= 0) {
+        speed = expectPositiveNumber(Number(requireOptionValue(rest, speedIndex, "--speed")), "--speed");
+        rest.splice(speedIndex, 2);
+      }
+
+      let loops = 1;
+      const loopsIndex = rest.indexOf("--loops");
+      if (loopsIndex >= 0) {
+        loops = Math.trunc(expectPositiveNumber(Number(requireOptionValue(rest, loopsIndex, "--loops")), "--loops"));
+        rest.splice(loopsIndex, 2);
+      }
+
+      let stdinBox: CanvasBox | undefined;
+      if (useStdin) {
+        const boxes = parseCanvasBoxesFromStdin(stdinText, "actor run encircle", { preferResolvedBounds: true });
+        if (boxes.length !== 1) {
+          throw new ActorApiError("invalid_args", `actor run encircle stdin mode requires exactly one resolved bounds rectangle; got ${boxes.length}`);
+        }
+        stdinBox = boxes[0];
+        center = center ?? circleCenterFromBox(stdinBox);
+      }
+
+      if (!center) {
+        throw new ActorApiError("invalid_args", "encircle requires --at <x> <y> or -");
+      }
+      if (rest.length > 0) {
+        throw new ActorApiError("invalid_args", `Unknown encircle args: ${rest.join(" ")}`);
+      }
+
+      return {
+        timeoutMs,
+        action: {
+          kind: "encircle",
+          center,
+          radius: radius ?? defaultEncircleRadius(stdinBox),
+          loops,
+          speed,
+        },
+      };
     }
     case "dismiss":
       if (rest.length > 0) {

@@ -363,6 +363,8 @@ describe("cli help rendering", () => {
     expect(renderHelpTopic("actor run click")).toContain("gui actor run <name>.click [--button left|right|middle] [--at <x> <y> | -] [--timeout <ms>]");
     expect(renderHelpTopic("actor run click")).toContain("gui ax query --only 'Button#Save' | gui actor run pointer.main.click - | gui cg click -");
     expect(renderHelpTopic("actor run click")).toContain("`AXCursor = { type: \"ax.cursor\"; target: AXTarget; selection?: { location: number; length: number } }`");
+    expect(renderHelpTopic("actor run encircle")).toContain("gui actor run <name>.encircle [--at <x> <y> | -] [--radius <px>] [--speed <px/s>] [--loops <n>] [--timeout <ms>]");
+    expect(renderHelpTopic("actor run encircle")).toContain("gui ax query --only 'Button#Save' | gui actor run pointer.main.encircle - --loops 1");
     expect(renderHelpTopic("cg move")).toContain("gui cg move -");
     expect(renderHelpTopic("cg move")).toContain("gui ax query --only 'Button#Save' | gui cg move -");
     expect(renderHelpTopic("cg move")).toContain("`AXCursor = { type: \"ax.cursor\"; target: AXTarget; selection?: { location: number; length: number } }`");
@@ -457,7 +459,9 @@ describe("cli help rendering", () => {
     expect(findHelpTopic("actor run on")?.id).toBe("actor run on");
     expect(findHelpTopic("actor run off")?.id).toBe("actor run off");
     expect(findHelpTopic("actor run color")?.id).toBe("actor run color");
+    expect(findHelpTopic("actor run encircle")?.id).toBe("actor run encircle");
     expect(renderHelpTopic("actor run")).toContain("gui actor run <name>.move");
+    expect(renderHelpTopic("actor run")).toContain("gui actor run <name>.encircle [--at <x> <y> | -] [--radius <px>] [--speed <px/s>] [--loops <n>] [--timeout <ms>]");
     expect(renderHelpTopic("actor run")).toContain("gui actor run <name>.rect [--padding <pixels>] [--blur <pixels>] [--speed <px/s>] -");
     expect(renderHelpTopic("actor run")).toContain("gui actor run <name>.circ [--padding <pixels>] [--blur <pixels>] [--speed <px/s>] -");
     expect(renderHelpTopic("actor run")).toContain("gui actor run <name>.on [--transition fade|instant]");
@@ -467,6 +471,8 @@ describe("cli help rendering", () => {
     expect(renderHelpTopic("actor run")).toContain("gui actor run <name>.text <Text> [--font <name>] [--size <pt>] [--color <css-color>] [--highlight <css-color|none>] [--box <x y width height> | -]");
     expect(renderHelpTopic("actor run")).toContain("Bare gui actor run <name> resolves the actor type when possible");
     expect(renderHelpTopic("actor run move")).toContain("gui actor run <name>.move [--to <x> <y> | -]");
+    expect(renderHelpTopic("actor")).toContain("gui actor spawn pointer <name> [--duration-scale <scale>] [--idle <ms>]");
+    expect(renderHelpTopic("actor")).toContain("Pointer actors default to an idle pulse every 3000ms");
     expect(renderHelpTopic("actor")).toContain("gui actor spawn canvas <name>");
     expect(renderHelpTopic("actor")).toContain("gui actor spawn spotlight <name>");
     expect(renderHelpTopic("actor")).toContain("gui actor kill -");

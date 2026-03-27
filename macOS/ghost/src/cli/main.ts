@@ -205,6 +205,7 @@ const ACTOR_RUN_ACTION_NAMES = new Set([
   "scroll",
   "think",
   "narrate",
+  "encircle",
   "rect",
   "circ",
   "on",
@@ -2949,7 +2950,7 @@ async function main() {
         if (actorArgs[0] === "spawn") {
           try {
             const request = parseActorSpawnCLIArgs(actorArgs.slice(1));
-            console.log(JSON.stringify(await spawnActor(request.type, request.name, request.durationScale), null, 2));
+            console.log(JSON.stringify(await spawnActor(request.type, request.name, request.durationScale, request.idleMs), null, 2));
           } catch (error) {
             if (error instanceof ActorApiError) {
               failUsage("actor spawn");

@@ -444,7 +444,6 @@ describe("actor runtime", () => {
     const destination = { x: 920, y: 550 };
     const expectations = [
       { style: "fast", durationMs: 160 },
-      { style: "purposeful", durationMs: 258 },
       { style: "slow", durationMs: 443 },
       { style: "wandering", durationMs: 559 },
     ] as const;
@@ -475,6 +474,32 @@ describe("actor runtime", () => {
         durationMs: expectation.durationMs,
       });
     }
+
+    const purposefulPosted: string[] = [];
+    const purposefulRuntime = makeRuntimeWithMouse(purposefulPosted, { x: 640, y: 360 });
+    purposefulRuntime.spawn({ type: "pointer", name: "pointer.purposeful", durationScale: 1 });
+
+    await expect(purposefulRuntime.run("pointer.purposeful", {
+      action: {
+        kind: "move",
+        to: destination,
+        style: "purposeful",
+      },
+    })).resolves.toEqual({
+      ok: true,
+      name: "pointer.purposeful",
+      completed: true,
+    });
+
+    const purposefulMove = parseMessages(purposefulPosted)[1]!;
+    expect(purposefulMove).toMatchObject({
+      op: "move",
+      name: "pointer.purposeful",
+      to: destination,
+      style: "purposeful",
+    });
+    expect(Number(purposefulMove.durationMs)).toBeGreaterThanOrEqual(237);
+    expect(Number(purposefulMove.durationMs)).toBeLessThanOrEqual(279);
   });
 
   test("shows dismissed pointers before clicking at a new point", async () => {
@@ -513,7 +538,7 @@ describe("actor runtime", () => {
       op: "move",
       name: "pointer",
       to: { x: 820, y: 410 },
-      style: "fast",
+      style: "purposeful",
     });
     expect(messages[4]).toMatchObject({
       op: "click",
@@ -605,6 +630,67 @@ describe("actor runtime", () => {
       op: "click",
       name: "pointer",
       button: "middle",
+    });
+  });
+
+  test("moves visibly before clicking at a new target", async () => {
+    const posted: string[] = [];
+    const runtime = makeRuntimeWithMouse(posted, { x: 640, y: 360 });
+    runtime.spawn({ type: "pointer", name: "pointer", durationScale: 0 });
+
+    await expect(runtime.run("pointer", {
+      action: {
+        kind: "click",
+        button: "left",
+        at: { x: 900, y: 420 },
+      },
+    })).resolves.toEqual({
+      ok: true,
+      name: "pointer",
+      completed: true,
+    });
+
+    const messages = parseMessages(posted);
+    expect(messages.map((message) => message.op)).toEqual(["spawn", "move", "click"]);
+    expect(messages[1]).toMatchObject({
+      op: "move",
+      to: { x: 900, y: 420 },
+      style: "purposeful",
+    });
+  });
+
+  test("encircles a target after moving to the orbit start point", async () => {
+    const posted: string[] = [];
+    const runtime = makeRuntimeWithMouse(posted, { x: 640, y: 360 });
+    runtime.spawn({ type: "pointer", name: "pointer", durationScale: 0 });
+
+    await expect(runtime.run("pointer", {
+      action: {
+        kind: "encircle",
+        center: { x: 840, y: 420 },
+        radius: 72,
+        loops: 2,
+        speed: 420,
+      },
+    })).resolves.toEqual({
+      ok: true,
+      name: "pointer",
+      completed: true,
+    });
+
+    const messages = parseMessages(posted);
+    expect(messages.map((message) => message.op)).toEqual(["spawn", "move", "encircle"]);
+    expect(messages[1]).toMatchObject({
+      op: "move",
+      to: { x: 912, y: 420 },
+      style: "purposeful",
+    });
+    expect(messages[2]).toMatchObject({
+      op: "encircle",
+      center: { x: 840, y: 420 },
+      radius: 72,
+      loops: 2,
+      durationMs: 0,
     });
   });
 

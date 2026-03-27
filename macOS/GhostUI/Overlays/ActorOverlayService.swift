@@ -28,9 +28,13 @@ private struct ActorOverlayPayload: Decodable {
     let type: String?
     let position: ActorOverlayPoint?
     let to: ActorOverlayPoint?
+    let center: ActorOverlayPoint?
     let rect: ActorOverlayRect?
     let box: ActorOverlayRect?
     let durationMs: Double?
+    let idleMs: Double?
+    let radius: Double?
+    let loops: Double?
     let style: String?
     let button: String?
     let dx: Double?
@@ -61,6 +65,8 @@ private final class PointerActorLayer {
     var bubbleLayer: CALayer?
     var bubbleTextLayer: CATextLayer?
     var cleanupItems: [DispatchWorkItem] = []
+    var idleMs: Double = 3000
+    var idleWorkItem: DispatchWorkItem?
 
     init(name: String, screenPosition: CGPoint) {
         self.name = name
@@ -104,6 +110,11 @@ private final class PointerActorLayer {
             item.cancel()
         }
         cleanupItems.removeAll()
+    }
+
+    func cancelIdle() {
+        idleWorkItem?.cancel()
+        idleWorkItem = nil
     }
 }
 
@@ -204,9 +215,11 @@ final class ActorOverlayService {
         switch payload.op {
         case "spawn":
             let actor = ensureActor(named: payload.name, root: root, screenPosition: payload.position?.cgPoint)
+            actor.idleMs = payload.idleMs ?? actor.idleMs
             actor.screenPosition = payload.position?.cgPoint ?? actor.screenPosition
             syncPosition(actor, root: root)
             show(actor, duration: durationSeconds(payload.durationMs))
+            scheduleIdlePop(actor, after: durationSeconds(payload.durationMs))
         case "show":
             guard let actor = actor(named: payload.name, root: root) else { return }
             if let position = payload.position?.cgPoint {
@@ -214,39 +227,63 @@ final class ActorOverlayService {
             }
             syncPosition(actor, root: root)
             show(actor, duration: durationSeconds(payload.durationMs))
+            scheduleIdlePop(actor, after: durationSeconds(payload.durationMs))
         case "move":
             guard let actor = actor(named: payload.name, root: root), let target = payload.to?.cgPoint else { return }
             clearTransientDecorations(actor)
-            show(actor, duration: 0.12)
+            show(actor, duration: 0.18)
             animateMove(actor, root: root, to: target, duration: durationSeconds(payload.durationMs), style: payload.style ?? "purposeful")
+            scheduleIdlePop(actor, after: durationSeconds(payload.durationMs))
         case "click":
             guard let actor = actor(named: payload.name, root: root) else { return }
             clearTransientDecorations(actor)
-            show(actor, duration: 0.12)
+            show(actor, duration: 0.18)
             animateClick(actor, root: root, duration: durationSeconds(payload.durationMs), button: payload.button ?? "left")
+            scheduleIdlePop(actor, after: durationSeconds(payload.durationMs))
         case "drag":
             guard let actor = actor(named: payload.name, root: root), let target = payload.to?.cgPoint else { return }
             clearTransientDecorations(actor)
-            show(actor, duration: 0.12)
+            show(actor, duration: 0.18)
             animateDrag(actor, root: root, to: target, duration: durationSeconds(payload.durationMs))
+            scheduleIdlePop(actor, after: durationSeconds(payload.durationMs))
         case "scroll":
             guard let actor = actor(named: payload.name, root: root) else { return }
             clearTransientDecorations(actor)
-            show(actor, duration: 0.12)
+            show(actor, duration: 0.18)
             animateScroll(actor, root: root, dx: payload.dx ?? 0, dy: payload.dy ?? 0, duration: durationSeconds(payload.durationMs))
+            scheduleIdlePop(actor, after: durationSeconds(payload.durationMs))
         case "thinkStart":
             guard let actor = actor(named: payload.name, root: root) else { return }
             clearTransientDecorations(actor)
-            show(actor, duration: 0.12)
+            show(actor, duration: 0.18)
             startThinking(actor)
         case "thinkStop":
             guard let actor = actorsByName[payload.name] else { return }
             stopThinking(actor, duration: durationSeconds(payload.durationMs))
+            scheduleIdlePop(actor, after: durationSeconds(payload.durationMs))
         case "narrate":
             guard let actor = actor(named: payload.name, root: root) else { return }
             clearTransientDecorations(actor)
-            show(actor, duration: 0.12)
+            show(actor, duration: 0.18)
             showBubble(actor, root: root, text: payload.text ?? "", duration: durationSeconds(payload.durationMs))
+            scheduleIdlePop(actor, after: durationSeconds(payload.durationMs))
+        case "encircle":
+            guard
+                let actor = actor(named: payload.name, root: root),
+                let center = payload.center?.cgPoint,
+                let radius = payload.radius
+            else { return }
+            clearTransientDecorations(actor)
+            show(actor, duration: 0.18)
+            animateEncircle(
+                actor,
+                root: root,
+                center: center,
+                radius: CGFloat(radius),
+                loops: max(1, Int(payload.loops ?? 1)),
+                duration: durationSeconds(payload.durationMs)
+            )
+            scheduleIdlePop(actor, after: durationSeconds(payload.durationMs))
         case "dismiss":
             guard let actor = actorsByName[payload.name] else { return }
             clearTransientDecorations(actor)
@@ -255,9 +292,11 @@ final class ActorOverlayService {
             guard let actor = actorsByName[payload.name] else { return }
             clearTransientDecorations(actor)
             setPressed(actor, pressed: false)
+            scheduleIdlePop(actor)
         case "kill":
             guard let actor = actorsByName.removeValue(forKey: payload.name) else { return }
             clearTransientDecorations(actor)
+            actor.cancelIdle()
             actor.cancelCleanup()
             actor.container.removeAllAnimations()
             actor.container.removeFromSuperlayer()
@@ -513,6 +552,8 @@ final class ActorOverlayService {
     private func hide(_ actor: PointerActorLayer, duration: CFTimeInterval) {
         actor.hidden = true
         actor.cancelCleanup()
+        actor.cancelIdle()
+        stopNarrationAnimation(actor)
 
         let scale = CABasicAnimation(keyPath: "transform.scale")
         scale.fromValue = actor.container.presentation()?.value(forKeyPath: "transform.scale") as? CGFloat ?? 1
@@ -543,21 +584,11 @@ final class ActorOverlayService {
         let to = OverlayWindowManager.shared.screenPointToView(target)
         actor.screenPosition = target
         setPressed(actor, pressed: false)
+        let timing = timingFunction(for: style)
+        let resolvedDuration = max(0.01, duration)
 
-        let timing: CAMediaTimingFunctionName
-        switch style {
-        case "fast":
-            timing = .easeOut
-        case "slow":
-            timing = .easeInEaseOut
-        case "wandering":
-            timing = .linear
-        default:
-            timing = .easeInEaseOut
-        }
-
-        animateLayerPosition(actor.body, from: from, to: to, duration: max(0.01, duration), timing: timing, wandering: style == "wandering")
-        animateLayerPosition(actor.halo, from: from, to: to, duration: max(0.01, duration), timing: timing, wandering: style == "wandering")
+        animateLayerPosition(actor.body, from: from, to: to, duration: resolvedDuration, timing: timing, style: style)
+        animateLayerPosition(actor.halo, from: from, to: to, duration: resolvedDuration, timing: timing, style: style)
     }
 
     private func animateClick(_ actor: PointerActorLayer, root: CALayer, duration: CFTimeInterval, button: String) {
@@ -607,6 +638,7 @@ final class ActorOverlayService {
         dragLayer.fillColor = nil
         dragLayer.lineWidth = 2.5
         dragLayer.lineDashPattern = [8, 5]
+        dragLayer.lineDashPhase = CGFloat.random(in: 0...6)
         dragLayer.lineCap = .round
         actor.container.addSublayer(dragLayer)
         actor.dragLayer = dragLayer
@@ -619,8 +651,9 @@ final class ActorOverlayService {
         dragLayer.add(stroke, forKey: "drag-stroke")
 
         setPressed(actor, pressed: true)
-        animateLayerPosition(actor.body, from: start, to: end, duration: max(0.18, duration), timing: .easeInEaseOut, wandering: false)
-        animateLayerPosition(actor.halo, from: start, to: end, duration: max(0.18, duration), timing: .easeInEaseOut, wandering: false)
+        let timing = CAMediaTimingFunction(name: .easeInEaseOut)
+        animateLayerPosition(actor.body, from: start, to: end, duration: max(0.18, duration), timing: timing, style: "drag")
+        animateLayerPosition(actor.halo, from: start, to: end, duration: max(0.18, duration), timing: timing, style: "drag")
 
         let release = DispatchWorkItem { [weak self, weak actor] in
             guard let self, let actor else { return }
@@ -721,6 +754,7 @@ final class ActorOverlayService {
 
     private func showBubble(_ actor: PointerActorLayer, root: CALayer, text: String, duration: CFTimeInterval) {
         guard !text.isEmpty else { return }
+        startNarrationAnimation(actor)
 
         let fontSize: CGFloat = 24
         let font = CTFontCreateWithName("SF Pro Text" as CFString, fontSize, nil)
@@ -849,6 +883,7 @@ final class ActorOverlayService {
         guard let bubble = actor.bubbleLayer else { return }
         actor.bubbleLayer = nil
         actor.bubbleTextLayer = nil
+        stopNarrationAnimation(actor)
 
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = bubble.presentation()?.opacity ?? bubble.opacity
@@ -862,9 +897,11 @@ final class ActorOverlayService {
 
     private func clearTransientDecorations(_ actor: PointerActorLayer) {
         actor.cancelCleanup()
+        actor.cancelIdle()
         hideBubble(actor)
         stopThinking(actor, duration: 0)
         removeDragLayer(actor)
+        stopNarrationAnimation(actor)
         setPressed(actor, pressed: false)
     }
 
@@ -891,21 +928,31 @@ final class ActorOverlayService {
         from: CGPoint,
         to: CGPoint,
         duration: CFTimeInterval,
-        timing: CAMediaTimingFunctionName,
-        wandering: Bool
+        timing: CAMediaTimingFunction,
+        style: String
     ) {
         layer.removeAnimation(forKey: "move")
         layer.position = to
 
-        if wandering {
+        if style == "wandering" {
             let path = CGMutablePath()
             path.move(to: from)
-            let mid = CGPoint(x: (from.x + to.x) / 2 + 28, y: (from.y + to.y) / 2 + 18)
+            let mid = randomWanderingControlPoint(from: from, to: to)
             path.addQuadCurve(to: to, control: mid)
             let animation = CAKeyframeAnimation(keyPath: "position")
             animation.path = path
             animation.duration = duration
-            animation.timingFunction = CAMediaTimingFunction(name: timing)
+            animation.timingFunction = timing
+            layer.add(animation, forKey: "move")
+            return
+        }
+
+        if style == "purposeful" {
+            let animation = CAKeyframeAnimation(keyPath: "position")
+            animation.values = [from, overshootPoint(from: from, to: to), to]
+            animation.keyTimes = [0, 0.86, 1]
+            animation.duration = duration
+            animation.timingFunctions = [timing, CAMediaTimingFunction(name: .easeInEaseOut)]
             layer.add(animation, forKey: "move")
             return
         }
@@ -914,8 +961,147 @@ final class ActorOverlayService {
         animation.fromValue = from
         animation.toValue = to
         animation.duration = duration
-        animation.timingFunction = CAMediaTimingFunction(name: timing)
+        animation.timingFunction = timing
         layer.add(animation, forKey: "move")
+    }
+
+    private func animateEncircle(
+        _ actor: PointerActorLayer,
+        root: CALayer,
+        center: CGPoint,
+        radius: CGFloat,
+        loops: Int,
+        duration: CFTimeInterval
+    ) {
+        let viewCenter = OverlayWindowManager.shared.screenPointToView(center)
+        let start = currentPosition(actor)
+        let startAngle = atan2(start.y - viewCenter.y, start.x - viewCenter.x)
+        let endAngle = startAngle + CGFloat.pi * 2 * CGFloat(max(1, loops))
+        let path = CGMutablePath()
+        path.addArc(center: viewCenter, radius: max(4, radius), startAngle: startAngle, endAngle: endAngle, clockwise: false)
+
+        for layer in [actor.body, actor.halo] {
+            layer.removeAnimation(forKey: "encircle")
+            let orbit = CAKeyframeAnimation(keyPath: "position")
+            orbit.path = path
+            orbit.duration = max(0.1, duration)
+            orbit.calculationMode = .paced
+            orbit.rotationMode = .rotateAuto
+            orbit.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(orbit, forKey: "encircle")
+            layer.position = start
+        }
+    }
+
+    private func scheduleIdlePop(_ actor: PointerActorLayer, after delay: CFTimeInterval = 0) {
+        actor.cancelIdle()
+        guard actor.idleMs > 0, !actor.hidden else { return }
+
+        let idleDelay = max(0, delay) + actor.idleMs / 1000
+        let work = DispatchWorkItem { [weak self, weak actor] in
+            guard let self, let actor, !actor.hidden else { return }
+            self.performIdlePop(actor)
+            self.scheduleIdlePop(actor)
+        }
+        actor.idleWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + idleDelay, execute: work)
+    }
+
+    private func performIdlePop(_ actor: PointerActorLayer) {
+        let point = currentPosition(actor)
+        actor.body.removeAnimation(forKey: "idle-pop")
+
+        let pop = CAKeyframeAnimation(keyPath: "transform.scale")
+        pop.values = [1.0, 1.16, 1.0]
+        pop.keyTimes = [0, 0.45, 1]
+        pop.duration = 0.42
+        pop.timingFunctions = [CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .easeInEaseOut)]
+        actor.body.add(pop, forKey: "idle-pop")
+
+        addPulseRing(
+            root: actor.container,
+            point: point,
+            color: .systemBlue.withAlphaComponent(0.55),
+            scale: 2.4,
+            duration: 0.5
+        )
+    }
+
+    private func startNarrationAnimation(_ actor: PointerActorLayer) {
+        guard actor.halo.animation(forKey: "narrate-pulse") == nil else { return }
+
+        let pulse = CAKeyframeAnimation(keyPath: "transform.scale")
+        pulse.values = [1.0, 1.15, 1.0]
+        pulse.keyTimes = [0, 0.5, 1]
+        pulse.duration = 1.2
+        pulse.repeatCount = .infinity
+        pulse.timingFunctions = [CAMediaTimingFunction(name: .easeInEaseOut), CAMediaTimingFunction(name: .easeInEaseOut)]
+        actor.halo.add(pulse, forKey: "narrate-pulse")
+
+        let glow = CAKeyframeAnimation(keyPath: "opacity")
+        glow.values = [0.18, 0.35, 0.18]
+        glow.keyTimes = [0, 0.5, 1]
+        glow.duration = 1.2
+        glow.repeatCount = .infinity
+        actor.halo.add(glow, forKey: "narrate-glow")
+
+        let wobble = CAKeyframeAnimation(keyPath: "transform.rotation.z")
+        wobble.values = [0, 0.05, -0.05, 0]
+        wobble.keyTimes = [0, 0.33, 0.66, 1]
+        wobble.duration = 1.2
+        wobble.repeatCount = .infinity
+        actor.body.add(wobble, forKey: "narrate-wobble")
+    }
+
+    private func stopNarrationAnimation(_ actor: PointerActorLayer) {
+        actor.halo.removeAnimation(forKey: "narrate-pulse")
+        actor.halo.removeAnimation(forKey: "narrate-glow")
+        actor.body.removeAnimation(forKey: "narrate-wobble")
+    }
+
+    private func timingFunction(for style: String) -> CAMediaTimingFunction {
+        switch style {
+        case "fast":
+            return CAMediaTimingFunction(name: .easeOut)
+        case "slow":
+            return CAMediaTimingFunction(name: .easeInEaseOut)
+        case "wandering":
+            return CAMediaTimingFunction(name: .linear)
+        case "purposeful":
+            return CAMediaTimingFunction(
+                controlPoints: Float.random(in: 0.2...0.3),
+                Float.random(in: 0.78...0.92),
+                Float.random(in: 0.2...0.34),
+                1.0
+            )
+        default:
+            return CAMediaTimingFunction(name: .easeInEaseOut)
+        }
+    }
+
+    private func overshootPoint(from: CGPoint, to: CGPoint) -> CGPoint {
+        let dx = to.x - from.x
+        let dy = to.y - from.y
+        let magnitude = max(1, hypot(dx, dy))
+        let overshoot = min(18, max(6, magnitude * 0.06))
+        return CGPoint(
+            x: to.x + (dx / magnitude) * overshoot,
+            y: to.y + (dy / magnitude) * overshoot
+        )
+    }
+
+    private func randomWanderingControlPoint(from: CGPoint, to: CGPoint) -> CGPoint {
+        let mid = CGPoint(x: (from.x + to.x) / 2, y: (from.y + to.y) / 2)
+        let dx = to.x - from.x
+        let dy = to.y - from.y
+        let magnitude = max(1, hypot(dx, dy))
+        let normal = CGPoint(x: -dy / magnitude, y: dx / magnitude)
+        let lateral = CGFloat.random(in: 16...52) * (Bool.random() ? 1 : -1)
+        let drift = CGFloat.random(in: -20...20)
+        return CGPoint(
+            x: mid.x + normal.x * lateral + drift,
+            y: mid.y + normal.y * lateral + drift * 0.45
+        )
     }
 
     private func addPulseRing(root: CALayer, point: CGPoint, color: NSColor, scale: CGFloat, duration: CFTimeInterval) {

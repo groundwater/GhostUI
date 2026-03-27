@@ -165,16 +165,25 @@ describe("actor protocol", () => {
       type: "pointer",
       name: "pointer.main",
       durationScale: 0,
+      idleMs: 3000,
     });
     expect(parseActorSpawnCLIArgs(["canvas", "canvas.notes"])).toEqual({
       type: "canvas",
       name: "canvas.notes",
       durationScale: 1,
+      idleMs: 3000,
     });
     expect(parseActorSpawnCLIArgs(["spotlight", "spotlight.focus"])).toEqual({
       type: "spotlight",
       name: "spotlight.focus",
       durationScale: 1,
+      idleMs: 3000,
+    });
+    expect(parseActorSpawnCLIArgs(["pointer", "pointer.idle", "--idle", "0"])).toEqual({
+      type: "pointer",
+      name: "pointer.idle",
+      durationScale: 1,
+      idleMs: 0,
     });
 
     expect(parseActorRunCLIArgs("move", ["--to", "840", "420", "--style", "wandering", "--timeout", "5000"])).toEqual({
@@ -224,6 +233,17 @@ describe("actor protocol", () => {
       action: {
         kind: "narrate",
         text: "Heads up",
+      },
+      timeoutMs: undefined,
+    });
+
+    expect(parseActorRunCLIArgs("encircle", ["--at", "30", "40", "--radius", "72", "--speed", "420", "--loops", "2"])).toEqual({
+      action: {
+        kind: "encircle",
+        center: { x: 30, y: 40 },
+        radius: 72,
+        speed: 420,
+        loops: 2,
       },
       timeoutMs: undefined,
     });
@@ -503,16 +523,29 @@ describe("actor protocol", () => {
       type: "pointer",
       name: "pointer",
       durationScale: 1,
+      idleMs: 3000,
     });
     expect(normalizeActorSpawnRequest({ type: "canvas", name: "canvas.notes" })).toEqual({
       type: "canvas",
       name: "canvas.notes",
       durationScale: 1,
+      idleMs: 3000,
     });
 
     expect(normalizeActorRunRequest({ kind: "narrate", text: "hello", timeoutMs: 1500 })).toEqual({
       action: { kind: "narrate", text: "hello" },
       timeoutMs: 1500,
+    });
+
+    expect(normalizeActorRunRequest({ kind: "encircle", center: { x: 420, y: 240 } })).toEqual({
+      action: {
+        kind: "encircle",
+        center: { x: 420, y: 240 },
+        radius: 60,
+        loops: 1,
+        speed: 400,
+      },
+      timeoutMs: undefined,
     });
 
     expect(normalizeActorRunRequest({ kind: "move", to: { x: 420, y: 240 } })).toEqual({

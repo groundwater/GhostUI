@@ -389,9 +389,11 @@ export async function spawnActor(
   type: ActorType,
   name: string,
   durationScale?: number,
+  idleMs?: number,
 ): Promise<{ ok: true; name: string; type: ActorType; durationScale: number }> {
   const body: Record<string, unknown> = { type, name };
   if (durationScale !== undefined) body.durationScale = durationScale;
+  if (idleMs !== undefined) body.idleMs = idleMs;
   const res = await daemonFetch(`${BASE}/api/actors/spawn`, {
     method: "POST",
     headers: { "content-type": "application/json" },

@@ -27,6 +27,7 @@ interface ActorState {
   name: string;
   type: ActorType;
   durationScale: number;
+  idleMs: number;
   position: { x: number; y: number };
   hidden: boolean;
   activeRun?: { controller: AbortController };
@@ -63,14 +64,18 @@ interface SpotlightState {
 }
 
 interface ActorOverlayCommand {
-  op: "spawn" | "show" | "move" | "click" | "drag" | "scroll" | "thinkStart" | "thinkStop" | "narrate" | "dismiss" | "kill" | "cancel" | "draw" | "text" | "clear";
+  op: "spawn" | "show" | "move" | "click" | "drag" | "scroll" | "thinkStart" | "thinkStop" | "narrate" | "encircle" | "dismiss" | "kill" | "cancel" | "draw" | "text" | "clear";
   name: string;
   type?: ActorType;
   position?: { x: number; y: number };
   to?: { x: number; y: number };
+  center?: { x: number; y: number };
   rect?: { x: number; y: number; width: number; height: number };
   box?: { x: number; y: number; width: number; height: number };
   durationMs?: number;
+  idleMs?: number;
+  radius?: number;
+  loops?: number;
   style?: string;
   button?: string;
   dx?: number;
@@ -168,6 +173,7 @@ export class ActorRuntime {
       name: request.name,
       type: request.type,
       durationScale: request.durationScale,
+      idleMs: request.idleMs ?? 3000,
       position,
       hidden: request.type === "spotlight",
       canvas: request.type === "canvas"
@@ -196,6 +202,7 @@ export class ActorRuntime {
         type: actor.type,
         position,
         durationMs: this.scaleDuration(actor, 180),
+        idleMs: actor.idleMs,
       });
     } else if (actor.type === "canvas") {
       this.post({
@@ -318,6 +325,9 @@ export class ActorRuntime {
           throw new ActorApiError("invalid_args", "narrate text must be non-empty");
         }
         return;
+      case "encircle":
+        validateActorPoint(space, action.center, "center");
+        return;
       case "dismiss":
         return;
       default:
@@ -336,6 +346,10 @@ export class ActorRuntime {
       return;
     }
 
+    await this.runPointerAction(actor, action, signal);
+  }
+
+  private async runPointerAction(actor: ActorState, action: ActorAction, signal: AbortSignal): Promise<void> {
     switch (action.kind) {
       case "move":
         await this.ensureVisible(actor, signal);
@@ -344,7 +358,7 @@ export class ActorRuntime {
       case "click":
         await this.ensureVisible(actor, signal);
         if (action.at) {
-          await this.moveActor(actor, action.at, this.moveDuration(actor, "fast", action.at), "fast", signal);
+          await this.movePointerIntoPosition(actor, action.at, signal);
         }
         this.post({
           op: "click",
@@ -404,6 +418,24 @@ export class ActorRuntime {
         });
         await sleep(this.narrateDuration(actor, action.text), signal);
         return;
+      case "encircle":
+        await this.ensureVisible(actor, signal);
+        {
+          const start = this.encircleStartPoint(action.center, action.radius);
+          await this.movePointerIntoPosition(actor, start, signal);
+          const durationMs = this.encircleDuration(actor, action.radius, action.loops, action.speed);
+          this.post({
+            op: "encircle",
+            name: actor.name,
+            center: action.center,
+            radius: action.radius,
+            loops: action.loops,
+            durationMs,
+          });
+          await sleep(durationMs, signal);
+          actor.position = start;
+        }
+        return;
       case "dismiss":
         if (actor.hidden) return;
         {
@@ -420,6 +452,11 @@ export class ActorRuntime {
       case "draw":
       case "text":
       case "clear":
+      case "rect":
+      case "circ":
+      case "on":
+      case "off":
+      case "color":
         throw new ActorApiError("unknown_action", `Unknown action: ${action.kind}`);
     }
   }
@@ -607,12 +644,26 @@ export class ActorRuntime {
     actor.position = { ...to };
   }
 
+  private async movePointerIntoPosition(
+    actor: ActorState,
+    to: { x: number; y: number },
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (distance(actor.position, to) <= 0.5) {
+      return;
+    }
+    await this.moveActor(actor, to, this.moveDuration(actor, "purposeful", to), "purposeful", signal);
+  }
+
   private scaleDuration(actor: ActorState, ms: number): number {
     return roundDuration(ms * actor.durationScale);
   }
 
   private moveDuration(actor: ActorState, style: string, to: { x: number; y: number }): number {
     const d = distance(actor.position, to);
+    const jitter = style === "purposeful"
+      ? 0.92 + Math.random() * 0.16
+      : 1;
     switch (style) {
       case "fast":
         return this.scaleDuration(actor, clamp(120 + d * 0.18, 120, 320));
@@ -622,7 +673,7 @@ export class ActorRuntime {
         return this.scaleDuration(actor, clamp(420 + d * 0.62, 420, 1400));
       case "purposeful":
       default:
-        return this.scaleDuration(actor, clamp(180 + d * 0.35, 180, 760));
+        return this.scaleDuration(actor, clamp((180 + d * 0.35) * jitter, 180, 860));
     }
   }
 
@@ -637,6 +688,15 @@ export class ActorRuntime {
 
   private narrateDuration(actor: ActorState, text: string): number {
     return this.scaleDuration(actor, clamp(900 + text.length * 35, 1200, 4200));
+  }
+
+  private encircleStartPoint(center: { x: number; y: number }, radius: number): { x: number; y: number } {
+    return { x: center.x + radius, y: center.y };
+  }
+
+  private encircleDuration(actor: ActorState, radius: number, loops: number, speed: number): number {
+    const circumference = Math.PI * 2 * radius * loops;
+    return this.scaleDuration(actor, Math.max(1, Math.round((circumference / speed) * 1000)));
   }
 
   private clearSpotlight(actor: ActorState): void {
