@@ -79,6 +79,7 @@ import {
   parseGfxSpotlightOptions,
   parseGfxMarkerOptions,
   parseActorKillTargetsFromText,
+  parseKeyboardInputSpec,
   resolveActorRunInvocation,
 } from "./main.js";
 import { waitForDrawOverlayAttachment } from "./draw-stream.js";
@@ -170,6 +171,28 @@ describe("command alias resolution", () => {
   test("maps the crdt q alias to query", () => {
     expect(resolveCRDTSubcommandAlias("q")).toBe("query");
     expect(resolveCRDTSubcommandAlias("query")).toBe("query");
+  });
+});
+
+describe("keyboard input parsing", () => {
+  test("parses combo shortcuts into keys and modifiers", () => {
+    expect(parseKeyboardInputSpec("cmd+shift+p")).toEqual({
+      keys: ["p"],
+      modifiers: ["cmd", "shift"],
+    });
+  });
+
+  test("parses named keys and single characters without modifiers", () => {
+    expect(parseKeyboardInputSpec("return")).toEqual({ keys: ["return"] });
+    expect(parseKeyboardInputSpec("x")).toEqual({ keys: ["x"] });
+  });
+
+  test("treats longer freeform input as text", () => {
+    expect(parseKeyboardInputSpec("Hello World")).toEqual({ keys: [], text: "Hello World" });
+  });
+
+  test("rejects modifier-only combos", () => {
+    expect(() => parseKeyboardInputSpec("cmd+shift")).toThrow("No key specified in combo (only modifiers found)");
   });
 });
 

@@ -16,6 +16,12 @@ describe("cli help rendering", () => {
     const help = renderRootHelp();
 
     expect(help).toContain("gui - query and interact with the macOS GUI");
+    expect(help).toContain("gui focused");
+    expect(help).toContain("gui cursor");
+    expect(help).toContain("gui click -");
+    expect(help).toContain("gui scroll - --dx --dy");
+    expect(help).toContain("gui shortcut <combo>");
+    expect(help).toContain("gui type - '<value>'");
     expect(help).toContain("gui ca script -");
     expect(help).toContain("gui gfx <subcommand>");
     expect(help).not.toContain("gui ca highlight -");
@@ -34,6 +40,12 @@ describe("cli help rendering", () => {
 
     expect(help).toContain("gui help - command and skill reference");
     expect(help).toContain("gui help query");
+    expect(help).toContain("gui help focused");
+    expect(help).toContain("gui help cursor");
+    expect(help).toContain("gui help click");
+    expect(help).toContain("gui help scroll");
+    expect(help).toContain("gui help shortcut");
+    expect(help).toContain("gui help type");
     expect(help).toContain("gui help ca");
     expect(help).toContain("gui help gfx");
     expect(help).not.toContain("gui help draw");
@@ -50,6 +62,24 @@ describe("cli help rendering", () => {
     expect(help).toContain("gui help vat watch");
     expect(help).toContain("gui skill claude");
     expect(help).toContain("gui skill codex");
+  });
+
+  test("intent-first topics are registered", () => {
+    expect(findHelpTopic("focused")?.id).toBe("focused");
+    expect(findHelpTopic("cursor")?.id).toBe("cursor");
+    expect(findHelpTopic("click")?.id).toBe("click");
+    expect(findHelpTopic("scroll")?.id).toBe("scroll");
+    expect(findHelpTopic("shortcut")?.id).toBe("shortcut");
+    expect(findHelpTopic("type")?.id).toBe("type");
+  });
+
+  test("intent-first help topics document payload-driven usage", () => {
+    expect(renderHelpTopic("focused")).toContain("gui focused | gui click -");
+    expect(renderHelpTopic("cursor")).toContain("gui cursor | gui type - 'foo'");
+    expect(renderHelpTopic("click")).toContain("gui ax query --only 'Button#Save' | gui click -");
+    expect(renderHelpTopic("scroll")).toContain("gui ax query --only 'ScrollArea' | gui scroll - --dx 0 --dy -240");
+    expect(renderHelpTopic("shortcut")).toContain("gui shortcut cmd+n");
+    expect(renderHelpTopic("type")).toContain("gui cursor | gui type - 'foo'");
   });
 
   test("vat help documents the daemon-owned VAT entrypoint", () => {

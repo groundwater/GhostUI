@@ -217,6 +217,14 @@ const ACTOR_RUN_ACTION_NAMES = new Set([
   "dismiss",
 ]);
 
+const INTENT_FOCUSED_QUERY = "**[focused]";
+const KEYBOARD_MODIFIER_NAMES = new Set(["cmd", "command", "shift", "option", "alt", "control", "ctrl"]);
+const KNOWN_SHORTCUT_KEYS = new Set([
+  "return", "enter", "tab", "space", "delete", "backspace", "escape", "esc",
+  "left", "right", "down", "up", "home", "end", "pageup", "pagedown", "forwarddelete",
+  "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
+]);
+
 const command = resolveCommandAlias(args[0]);
 const preservesLocalAppFlag = command === "ax" && (args[1] === "query" || args[1] === "bench-observers");
 
@@ -1298,6 +1306,42 @@ function parsePointerButtonFlag(args: string[], usageTopic: string): PointerButt
   return button as PointerButton;
 }
 
+export function parseKeyboardInputSpec(keyInput: string): { keys: string[]; modifiers?: string[]; text?: string } {
+  const trimmed = keyInput.trim();
+  if (!trimmed) {
+    throw new Error("Keyboard input requires a combo, special key, or text value");
+  }
+
+  if (trimmed.includes("+")) {
+    const parts = trimmed.split("+").map(part => part.trim().toLowerCase()).filter(Boolean);
+    const modifiers: string[] = [];
+    const keys: string[] = [];
+    for (const part of parts) {
+      if (KEYBOARD_MODIFIER_NAMES.has(part)) {
+        modifiers.push(part);
+      } else {
+        keys.push(part);
+      }
+    }
+    if (keys.length === 0) {
+      throw new Error("No key specified in combo (only modifiers found)");
+    }
+    return { keys, ...(modifiers.length > 0 ? { modifiers } : {}) };
+  }
+
+  const lower = trimmed.toLowerCase();
+  if (KNOWN_SHORTCUT_KEYS.has(lower) || trimmed.length === 1) {
+    return { keys: [lower] };
+  }
+
+  return { keys: [], text: trimmed };
+}
+
+async function sendKeyboardInputSpec(keyInput: string): Promise<void> {
+  const parsed = parseKeyboardInputSpec(keyInput);
+  await postKeyboardInput(parsed.keys, parsed.modifiers, parsed.text);
+}
+
 function stripOptionValueFlags(args: string[], flags: string[]): string[] {
   const skip = new Set<number>();
   for (const flag of flags) {
@@ -1571,6 +1615,11 @@ function stdinOnlyAXActionMessage(action: string): string {
     action === "perform" ? " <AXAction> -" :
     " -";
   return `gui ax ${action} expects \`-\` or a literal JSON AX cursor / AX target / AX query match payload. Use \`gui ax query ... | gui ax ${action}${suffix}\` if you want stdin.`;
+}
+
+function stdinOnlyIntentActionMessage(action: "click" | "type"): string {
+  const suffix = action === "type" ? " - '<value>'" : " -";
+  return `gui ${action} expects \`-\` or a literal JSON AX cursor / AX target / AX query match payload. Use \`gui ${action === "type" ? "cursor" : "focused"} | gui ${action}${suffix}\` or \`gui ax query ... | gui ${action}${suffix}\` if you want stdin.`;
 }
 
 function hasExplicitAXQueryScope(args: string[]): boolean {
@@ -2599,6 +2648,114 @@ async function main() {
     }
 
     switch (command) {
+      case "focused": {
+        if (args.length !== 1) {
+          failUsage("focused");
+        }
+        const matches = await fetchAXQueryMatches(INTENT_FOCUSED_QUERY, { kind: "focused" }, "only");
+        await renderAXQueryMatches(
+          matches,
+          "only",
+          "json",
+          buildVatA11YQueryPlan(INTENT_FOCUSED_QUERY, "only", { kind: "focused" }),
+        );
+        break;
+      }
+
+      case "cursor": {
+        if (args.length !== 1) {
+          failUsage("cursor");
+        }
+        const cursor = await fetchAXCursor();
+        console.log(JSON.stringify(cursor, null, process.stdout.isTTY ? 2 : 0));
+        break;
+      }
+
+      case "click": {
+        if (args.length !== 2) {
+          failUsage("click", stdinOnlyIntentActionMessage("click"));
+        }
+        try {
+          const target = await readAXTargetArgOrStdin("click", args[1]!, "click");
+          await axClickTarget(target);
+          console.error(`ok — clicked ${describeAXTarget(target)}`);
+          break;
+        } catch (error) {
+          failUsage("click", error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      case "scroll": {
+        const scrollArgs = args.slice(1);
+        const dxIndex = scrollArgs.indexOf("--dx");
+        const dyIndex = scrollArgs.indexOf("--dy");
+        if (scrollArgs.length < 5 || dxIndex < 0 || dyIndex < 0) {
+          failUsage("scroll");
+        }
+        const targetArg = scrollArgs[0];
+        if (!targetArg) {
+          failUsage("scroll");
+        }
+        const dx = Number(scrollArgs[dxIndex + 1]);
+        const dy = Number(scrollArgs[dyIndex + 1]);
+        if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+          failUsage("scroll", "--dx and --dy must be finite numbers");
+        }
+        const remaining = stripOptionValueFlags(scrollArgs, ["--dx", "--dy"]);
+        if (remaining.length !== 1) {
+          failUsage("scroll");
+        }
+        try {
+          const target = await readAXTargetArgOrStdin("scroll", targetArg, "scroll");
+          await postCgScroll(target.point.x, target.point.y, dx, dy);
+          console.error(`ok — scrolled ${describeAXTarget(target)}`);
+          break;
+        } catch (error) {
+          failUsage("scroll", error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      case "shortcut": {
+        if (args.length < 2) {
+          failUsage("shortcut");
+        }
+        try {
+          await sendKeyboardInputSpec(args.slice(1).join(" "));
+          console.error("ok");
+          break;
+        } catch (error) {
+          failUsage("shortcut", error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      case "type": {
+        if (args.length !== 3) {
+          failUsage("type", stdinOnlyIntentActionMessage("type"));
+        }
+        const [targetArg, typeValue] = args.slice(1);
+        if (!targetArg || typeValue === undefined) {
+          failUsage("type");
+        }
+        try {
+          if (targetArg === "-" && !process.stdin.isTTY) {
+            const input = parseAXScopePayload(await readStdinText("type"), "gui type");
+            if (input.kind === "cursor") {
+              await axTypeCursor(typeValue, input.cursor);
+            } else {
+              await axTypeTarget(typeValue, input.target);
+            }
+            console.error(`ok — typed into ${describeAXTarget(input.target)}`);
+            break;
+          }
+          const target = await readAXTargetArgOrStdin("type", targetArg, "type");
+          await axTypeTarget(typeValue, target);
+          console.error(`ok — typed into ${describeAXTarget(target)}`);
+          break;
+        } catch (error) {
+          failUsage("type", error instanceof Error ? error.message : String(error));
+        }
+      }
+
       case "skill": {
         const skillTarget = args[1];
         if (!skillTarget || skillTarget === "list") {
@@ -3538,40 +3695,7 @@ async function main() {
             if (cgArgs.length === 0) {
               failUsage("cg key");
             }
-            const keyInput = cgArgs.join(" ");
-            const MODIFIER_NAMES = new Set(["cmd", "command", "shift", "option", "alt", "control", "ctrl"]);
-
-            if (keyInput.includes("+")) {
-              const parts = keyInput.split("+").map(p => p.trim().toLowerCase());
-              const modifiers: string[] = [];
-              const keys: string[] = [];
-              for (const part of parts) {
-                if (MODIFIER_NAMES.has(part)) {
-                  modifiers.push(part);
-                } else {
-                  keys.push(part);
-                }
-              }
-              if (keys.length === 0) {
-                console.error("No key specified in combo (only modifiers found)");
-                process.exit(1);
-              }
-              await postKeyboardInput(keys, modifiers);
-            } else {
-              const KNOWN_KEYS = new Set([
-                "return", "enter", "tab", "space", "delete", "backspace", "escape", "esc",
-                "left", "right", "down", "up", "home", "end", "pageup", "pagedown", "forwarddelete",
-                "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
-              ]);
-              const lower = keyInput.toLowerCase();
-              if (KNOWN_KEYS.has(lower)) {
-                await postKeyboardInput([lower]);
-              } else if (keyInput.length === 1) {
-                await postKeyboardInput([lower]);
-              } else {
-                await postKeyboardInput([], undefined, keyInput);
-              }
-            }
+            await sendKeyboardInputSpec(cgArgs.join(" "));
             console.error("ok");
             break;
           }
