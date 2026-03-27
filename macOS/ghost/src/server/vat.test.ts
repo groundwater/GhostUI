@@ -278,6 +278,93 @@ describe("VAT routes", () => {
     });
   });
 
+  test("mounts the dock VAT driver with a normalized Dock tree", async () => {
+    __setNativeAXForTests(makeMockNativeAX({
+      wsGetRunningApps: () => [
+        { pid: 456, bundleId: "com.apple.dock", name: "Dock", regular: false },
+        { pid: 77, bundleId: "com.apple.finder", name: "Finder", regular: true },
+      ],
+      axSnapshot: (pid: number): NativeAXNode | null => pid === 456
+        ? {
+          role: "AXApplication",
+          title: "Dock",
+          children: [
+            {
+              role: "AXGroup",
+              children: [
+                {
+                  role: "AXList",
+                  children: [
+                    {
+                      role: "AXGroup",
+                      subrole: "AXApplicationDockItem",
+                      title: "Finder",
+                      capabilities: { running: true, badgeValue: 3 },
+                    },
+                    {
+                      role: "AXGroup",
+                      subrole: "AXSeparatorDockItem",
+                    },
+                    {
+                      role: "AXGroup",
+                      subrole: "AXTrashDockItem",
+                      title: "Trash",
+                      capabilities: { empty: true },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        }
+        : null,
+    }));
+
+    const registry = createVatRegistry();
+    const mountRes = await handleVAT(
+      new Request("http://localhost:7861/api/vat/mount", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: "/System/Dock",
+          driver: "dock",
+          args: [],
+        }),
+      }),
+      registry,
+    );
+
+    expect(mountRes).not.toBeNull();
+    expect((mountRes as Response).status).toBe(200);
+    const mounted = await (mountRes as Response).json();
+    expect(mounted.mount.driver).toBe("dock");
+    expect(mounted.mount.path).toBe("/System/Dock");
+    expect(mounted.tree).toEqual({
+      _tag: "System",
+      _children: [
+        {
+          _tag: "Dock",
+          _children: [
+            {
+              _tag: "AppIcon",
+              _text: "Finder",
+              badge: "3",
+              running: true,
+            },
+            {
+              _tag: "Separator",
+            },
+            {
+              _tag: "Trash",
+              _text: "Trash",
+              empty: true,
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   test("mounts a root a11y tree and overlays repeated sibling paths deterministically", async () => {
     __setNativeAXForTests(makeMockNativeAX({
       wsGetRunningApps: () => [

@@ -29,6 +29,14 @@ function loadNativeAXHelpers(): Required<DockVatDeps> {
   };
 }
 
+function emptyDockMount(path: string, observedPids: number[] = []): VatMountBuild {
+  return {
+    tree: wrapVatMountPath(path, []),
+    observedBundleIds: [DOCK_BUNDLE_ID],
+    observedPids,
+  };
+}
+
 function inferNodeText(node: AXNode): string | undefined {
   return [node.title, node.label, node.value, node.identifier]
     .find((value): value is string => typeof value === "string" && value.trim().length > 0)
@@ -62,6 +70,34 @@ function parseBadge(text: string): string | undefined {
   return match?.[1];
 }
 
+function readCapability(node: AXNode, key: string): unknown {
+  const capabilities = node.capabilities as Record<string, unknown> | undefined;
+  return capabilities?.[key];
+}
+
+function readBooleanCapability(node: AXNode, ...keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = readCapability(node, key);
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readStringCapability(node: AXNode, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = readCapability(node, key);
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+  }
+  return undefined;
+}
+
 function inferBoolean(text: string, patterns: RegExp[]): boolean | undefined {
   for (const pattern of patterns) {
     if (pattern.test(text)) {
@@ -71,7 +107,21 @@ function inferBoolean(text: string, patterns: RegExp[]): boolean | undefined {
   return undefined;
 }
 
-function classifyDockNode(node: AXNode): VatNode | null {
+function inferRunningFromAppMetadata(node: AXNode, runningApps: Array<{ bundleId: string; name: string }>): boolean | undefined {
+  const text = inferNodeText(node)?.toLowerCase();
+  const identifier = node.identifier?.toLowerCase();
+  if (!text && !identifier) {
+    return undefined;
+  }
+
+  return runningApps.some((app) =>
+    app.name.toLowerCase() === text
+    || (identifier ? app.bundleId.toLowerCase() === identifier || app.name.toLowerCase() === identifier : false))
+    ? true
+    : undefined;
+}
+
+function classifyDockNode(node: AXNode, runningApps: Array<{ bundleId: string; name: string }>): VatNode | null {
   const description = describeNode(node);
   if (!description) {
     return null;
@@ -121,22 +171,26 @@ function classifyDockNode(node: AXNode): VatNode | null {
     dockNode.identifier = node.identifier;
   }
 
-  const badge = parseBadge(description);
+  const badge = readStringCapability(node, "badge", "badgeValue", "badgeLabel") ?? parseBadge(description);
   if (badge) {
     dockNode.badge = badge;
   }
 
-  const running = inferBoolean(description, [/\brunning\b/i, /\bactive\b/i]);
+  const running = readBooleanCapability(node, "running", "isRunning", "active")
+    ?? inferRunningFromAppMetadata(node, runningApps)
+    ?? inferBoolean(description, [/\brunning\b/i, /\bactive\b/i]);
   if (running !== undefined && tag === "AppIcon") {
     dockNode.running = running;
   }
 
-  const bouncing = inferBoolean(description, [/\bbouncing\b/i, /\bbounce\b/i]);
+  const bouncing = readBooleanCapability(node, "bouncing", "bounce")
+    ?? inferBoolean(description, [/\bbouncing\b/i, /\bbounce\b/i]);
   if (bouncing !== undefined) {
     dockNode.bouncing = bouncing;
   }
 
-  const empty = inferBoolean(description, [/\bempty\b/i]);
+  const empty = readBooleanCapability(node, "empty", "isEmpty")
+    ?? inferBoolean(description, [/\bempty\b/i]);
   if (empty !== undefined && tag === "Trash") {
     dockNode.empty = empty;
   }
@@ -144,25 +198,22 @@ function classifyDockNode(node: AXNode): VatNode | null {
   return dockNode;
 }
 
-function collectDockItems(node: AXNode, items: VatNode[] = []): VatNode[] {
-  const dockNode = classifyDockNode(node);
+function collectDockItems(node: AXNode, runningApps: Array<{ bundleId: string; name: string }>, items: VatNode[] = []): VatNode[] {
+  const dockNode = classifyDockNode(node, runningApps);
   if (dockNode) {
     items.push(dockNode);
     return items;
   }
 
   for (const child of node.children ?? []) {
-    collectDockItems(child, items);
+    collectDockItems(child, runningApps, items);
   }
   return items;
 }
 
-function resolveDockPid(metadata: DockAppMetadata): number {
+function resolveDockPid(metadata: DockAppMetadata): number | null {
   const dockApp = metadata.apps.find((app) => app.bundleId === DOCK_BUNDLE_ID);
-  if (!dockApp) {
-    throw new VatApiError("invalid_args", `Unable to find a running Dock app (${DOCK_BUNDLE_ID})`);
-  }
-  return dockApp.pid;
+  return dockApp?.pid ?? null;
 }
 
 export function buildDockVatMountTree(request: VatMountRequest, deps: DockVatDeps = {}): VatMountBuild {
@@ -177,14 +228,23 @@ export function buildDockVatMountTree(request: VatMountRequest, deps: DockVatDep
     throw new VatApiError("invalid_args", "Dock VAT driver could not resolve native AX helpers");
   }
 
-  const dockPid = resolveDockPid(getAppMetadata());
-  const snapshot = snapshotApp(dockPid, DEFAULT_SNAPSHOT_DEPTH);
-  if (!snapshot?.tree) {
-    throw new VatApiError("invalid_args", "Unable to snapshot the Dock AX tree");
+  const metadata = getAppMetadata();
+  const dockPid = resolveDockPid(metadata);
+  if (!dockPid) {
+    return emptyDockMount(request.path);
   }
 
+  const snapshot = snapshotApp(dockPid, DEFAULT_SNAPSHOT_DEPTH);
+  if (!snapshot?.tree) {
+    return emptyDockMount(request.path, [dockPid]);
+  }
+
+  const runningApps = metadata.apps
+    .filter((app) => app.bundleId !== DOCK_BUNDLE_ID)
+    .map((app) => ({ bundleId: app.bundleId, name: app.name }));
+
   return {
-    tree: wrapVatMountPath(request.path, collectDockItems(snapshot.tree)),
+    tree: wrapVatMountPath(request.path, collectDockItems(snapshot.tree, runningApps)),
     observedBundleIds: [DOCK_BUNDLE_ID],
     observedPids: [dockPid],
   };

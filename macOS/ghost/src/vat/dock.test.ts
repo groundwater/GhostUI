@@ -29,15 +29,52 @@ describe("dock VAT driver", () => {
     );
   });
 
-  test("errors when the Dock app is not running", () => {
-    expect(() =>
-      buildDockVatMountTree(
-        { path: "/System/Dock", driver: "dock", args: [] },
-        {
-          getAppMetadata: () => ({ apps: [] }),
-          snapshotApp: () => null,
-        },
-      )).toThrow("Unable to find a running Dock app (com.apple.dock)");
+  test("returns an empty wrapped tree when the Dock app is not running", () => {
+    expect(buildDockVatMountTree(
+      { path: "/System/Dock", driver: "dock", args: [] },
+      {
+        getAppMetadata: () => ({ apps: [] }),
+        snapshotApp: () => null,
+      },
+    )).toEqual({
+      tree: {
+        _tag: "System",
+        _children: [
+          {
+            _tag: "Dock",
+            _children: [],
+          },
+        ],
+      },
+      observedBundleIds: ["com.apple.dock"],
+      observedPids: [],
+    });
+  });
+
+  test("returns an empty wrapped tree when Dock snapshotting fails", () => {
+    expect(buildDockVatMountTree(
+      { path: "/System/Dock", driver: "dock", args: [] },
+      {
+        getAppMetadata: () => ({
+          apps: [
+            { pid: 99, bundleId: "com.apple.dock", name: "Dock", regular: false },
+          ],
+        }),
+        snapshotApp: () => null,
+      },
+    )).toEqual({
+      tree: {
+        _tag: "System",
+        _children: [
+          {
+            _tag: "Dock",
+            _children: [],
+          },
+        ],
+      },
+      observedBundleIds: ["com.apple.dock"],
+      observedPids: [99],
+    });
   });
 
   test("flattens Dock AX content into semantic VAT nodes", () => {
@@ -47,6 +84,7 @@ describe("dock VAT driver", () => {
         getAppMetadata: () => ({
           apps: [
             { pid: 99, bundleId: "com.apple.dock", name: "Dock", regular: false },
+            { pid: 7, bundleId: "com.apple.finder", name: "Finder", regular: true },
           ],
         }),
         snapshotApp: () => ({
@@ -54,9 +92,10 @@ describe("dock VAT driver", () => {
             {
               role: "AXGroup",
               subrole: "AXApplicationDockItem",
-              title: "Finder running badge 2 bouncing",
+              title: "Finder",
               frame: { x: 10, y: 20, width: 64, height: 64 },
               identifier: "finder",
+              capabilities: { running: true, badgeValue: 2, bouncing: true } as AXNode["capabilities"],
             },
             {
               role: "AXGroup",
@@ -75,7 +114,8 @@ describe("dock VAT driver", () => {
             {
               role: "AXGroup",
               subrole: "AXTrashDockItem",
-              title: "Trash empty",
+              title: "Trash",
+              capabilities: { empty: true } as AXNode["capabilities"],
             },
           ]),
         }),
@@ -92,7 +132,7 @@ describe("dock VAT driver", () => {
           _children: [
             {
               _tag: "AppIcon",
-              _text: "Finder running badge 2 bouncing",
+              _text: "Finder",
               badge: "2",
               bouncing: true,
               frame: "(10,20,64,64)",
@@ -112,7 +152,7 @@ describe("dock VAT driver", () => {
             },
             {
               _tag: "Trash",
-              _text: "Trash empty",
+              _text: "Trash",
               empty: true,
             },
           ],
@@ -128,13 +168,14 @@ describe("dock VAT driver", () => {
         getAppMetadata: () => ({
           apps: [
             { pid: 99, bundleId: "com.apple.dock", name: "Dock", regular: false },
+            { pid: 101, bundleId: "com.apple.Safari", name: "Safari", regular: true },
           ],
         }),
         snapshotApp: () => ({
           tree: dockTree([
             {
               role: "AXButton",
-              title: "Safari running",
+              title: "Safari",
             },
           ]),
         }),
@@ -144,7 +185,7 @@ describe("dock VAT driver", () => {
     expect(tree.tree._children?.[0]?._children).toEqual([
       {
         _tag: "AppIcon",
-        _text: "Safari running",
+        _text: "Safari",
         running: true,
       },
     ]);
