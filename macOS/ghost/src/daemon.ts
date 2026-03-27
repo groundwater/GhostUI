@@ -1776,40 +1776,6 @@ const server = Bun.serve({
       });
     }
 
-    if (url.pathname === "/api/raw/leases") {
-      const doc = store.get(DEFAULT_DOC_PATH);
-      if (!doc) {
-        return new Response(JSON.stringify({}), {
-          headers: { "content-type": "application/json", "access-control-allow-origin": "*" },
-        });
-      }
-      const root = doc.getMap("root");
-      const leaseState = readWindowLeaseState(root);
-      const now = Date.now();
-      const annotated: Record<string, unknown> = {};
-      if (leaseState.focus) {
-        annotated.focus = {
-          ...leaseState.focus,
-          remainingMs: Math.max(0, leaseState.focus.expiresAt - now),
-          expired: leaseState.focus.expiresAt <= now,
-        };
-      }
-      if (leaseState.positions) {
-        const positions: Record<string, unknown> = {};
-        for (const [key, lease] of Object.entries(leaseState.positions)) {
-          positions[key] = {
-            ...lease,
-            remainingMs: Math.max(0, lease.expiresAt - now),
-            expired: lease.expiresAt <= now,
-          };
-        }
-        annotated.positions = positions;
-      }
-      return new Response(JSON.stringify(annotated, null, 2), {
-        headers: { "content-type": "application/json", "access-control-allow-origin": "*" },
-      });
-    }
-
     if (url.pathname === "/api/raw/events") {
       const encoder = new TextEncoder();
       const stream = new ReadableStream({
