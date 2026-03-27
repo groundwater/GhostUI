@@ -38,6 +38,7 @@ import {
   DEFAULT_GFX_MARKER_PADDING,
   DEFAULT_GFX_MARKER_ROUGHNESS,
   DEFAULT_GFX_MARKER_SIZE,
+  DEFAULT_GFX_SCAN_DURATION_MS,
   DEFAULT_GFX_XRAY_DURATION_MS,
   formatVatMountOutput,
   formatVatMountsOutput,
@@ -2083,6 +2084,21 @@ describe("gfx payload bridges", () => {
       direction: "left-to-right",
     });
     expect(args).toEqual(["-"]);
+  });
+
+  test("parses gfx scan options in every cardinal direction", () => {
+    expect(parseGfxScanOptions(["--direction", "top-to-bottom", "-"], "gfx scan")).toEqual({
+      durationMs: DEFAULT_GFX_SCAN_DURATION_MS,
+      direction: "top-to-bottom",
+    });
+    expect(parseGfxScanOptions(["--direction", "bottom-to-top", "-"], "gfx scan")).toEqual({
+      durationMs: DEFAULT_GFX_SCAN_DURATION_MS,
+      direction: "bottom-to-top",
+    });
+    expect(parseGfxScanOptions(["--direction", "right-to-left", "-"], "gfx scan")).toEqual({
+      durationMs: DEFAULT_GFX_SCAN_DURATION_MS,
+      direction: "right-to-left",
+    });
   });
 
   test("parses gfx arrow options, including --target and --from overriding the start point", () => {

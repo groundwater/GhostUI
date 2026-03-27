@@ -267,6 +267,17 @@ describe("CLI pipeline contracts", () => {
       durationMs: 750,
       direction: "top-to-bottom",
     });
+    expect(buildGfxScanOverlayRequestFromText(payloadText, {
+      durationMs: 750,
+      direction: "right-to-left",
+    })).toEqual({
+      rects: [
+        { x: 40, y: 50, width: 300, height: 200 },
+        { x: 400, y: 50, width: 320, height: 220 },
+      ],
+      durationMs: 750,
+      direction: "right-to-left",
+    });
     expect(arrow.items).toHaveLength(6);
   });
 
