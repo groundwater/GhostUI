@@ -69,7 +69,7 @@ interface OverlayScanBody {
   rects: OverlayRect[];
   durationMs?: number;
   outlineRects?: OverlayRect[];
-  direction?: "top-to-bottom" | "left-to-right";
+  direction?: "top-to-bottom" | "bottom-to-top" | "left-to-right" | "right-to-left";
 }
 
 interface OverlayFlashBody {

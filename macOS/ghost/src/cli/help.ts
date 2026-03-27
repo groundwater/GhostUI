@@ -200,7 +200,7 @@ const HELP_TOPICS: HelpTopic[] = [
     aliases: [],
     usage: [
       "gui gfx outline [--color <css-color>] [--size <pixels>] [--transition <fade|pop|draw>] [--fill <css-color>] [--duration <milliseconds>] -",
-      "gui gfx scan [--duration <milliseconds>] [--direction <top-to-bottom|left-to-right>] -",
+      "gui gfx scan [--duration <milliseconds>] [--direction <top-to-bottom|bottom-to-top|left-to-right|right-to-left>] -",
       "gui gfx xray [--duration <milliseconds>] [--direction <top-to-bottom|left-to-right|right-to-left|bottom-to-top>] -",
       "gui gfx spotlight [--color <css-color>] [--duration <milliseconds>] -",
       "gui gfx arrow [--color <css-color>] [--size <points>] [--length <pixels>] [--duration <milliseconds>] [--target <anchor>] [--from <x> <y>] -",
@@ -218,7 +218,7 @@ const HELP_TOPICS: HelpTopic[] = [
       "The stdin-driven subcommands read one or more AX/VAT target-bearing JSON payloads from stdin; `draw` also accepts a literal box.",
       "`outline`, `xray`, `spotlight`, `arrow`, and stdin `draw` share the same target contract: every leaf node with frame coordinates contributes a rect in deterministic traversal order, and payloads without leaf-frame nodes fall back to their top-level bounds.",
       "`outline` accepts --color, --size, optional --fill, --duration, and --transition with fade, pop, or draw. Omit --fill for a hollow outline.",
-      "`scan` resolves the same AX/VAT bounds, drives the red scan-line overlay, and emits one payload per crossed element in scan order. Use --direction with top-to-bottom or left-to-right.",
+      "`scan` resolves the same AX/VAT bounds, drives the red scan-line overlay, and emits one payload per crossed element in scan order. Use --direction with top-to-bottom, bottom-to-top, left-to-right, or right-to-left.",
       "`xray` uses the same AX/VAT bounds as outline and scan, defaults to a left-to-right sweep, and accepts all four cardinal directions: top-to-bottom, left-to-right, right-to-left, and bottom-to-top.",
       "`spotlight` does not outline the target. It computes the union of all resolved bounds and dims the complement outside that union.",
       "`spotlight` accepts --color and --duration, defaults to color `rgba(0,0,0,.5)`, and uses 1200ms like the other non-scan/xray overlay lifetimes.",

@@ -363,6 +363,72 @@ describe("CLI pipeline process e2e VAT scan scanline ordering", () => {
     expect(outputFrames[1].bounds!.x).toBe(250);  // Center
     expect(outputFrames[2].bounds!.x).toBe(500);  // Right
   });
+
+  test("scan emits multi-node frames in bottom-to-top scanline order when directed", async () => {
+    // Nodes deliberately in reverse-Y order for the upward sweep: Top, Middle, Bottom.
+    const tree: PlainNode = {
+      _tag: "VATRoot",
+      _children: [
+        {
+          _tag: "Application",
+          _children: [
+            { _tag: "Row", title: "Top", frame: { x: 100, y: 30, width: 280, height: 40 } },
+            { _tag: "Row", title: "Middle", frame: { x: 200, y: 200, width: 320, height: 40 } },
+            { _tag: "Row", title: "Bottom", frame: { x: 50, y: 400, width: 300, height: 40 } },
+          ],
+        },
+      ],
+    };
+    const nodes = tree._children![0]!._children!;
+    const payload = buildCLICompositionPayloadFromVatQueryResult("Row[frame]", tree, nodes, 3);
+    const text = JSON.stringify(payload);
+
+    const scanned = await runMainCLI(text, ["gfx", "scan", "--direction", "bottom-to-top", "-"], cliTestEnv);
+
+    expect(scanned.exitCode).toBe(0);
+    expect(normalizeOutput(scanned.stderr)).toBe("");
+
+    const outputFrames = scanned.stdout.trim().split("\n").filter(Boolean)
+      .map(line => parseJSON<CLICompositionPayload>(line));
+
+    expect(outputFrames).toHaveLength(3);
+    expect(outputFrames[0].bounds!.y).toBe(400);  // Bottom
+    expect(outputFrames[1].bounds!.y).toBe(200);  // Middle
+    expect(outputFrames[2].bounds!.y).toBe(30);   // Top
+  });
+
+  test("scan emits multi-node frames in right-to-left scanline order when directed", async () => {
+    // Nodes deliberately in reverse-X order for the leftward sweep: Right, Center, Left.
+    const tree: PlainNode = {
+      _tag: "VATRoot",
+      _children: [
+        {
+          _tag: "Application",
+          _children: [
+            { _tag: "Col", title: "Right", frame: { x: 500, y: 100, width: 40, height: 300 } },
+            { _tag: "Col", title: "Center", frame: { x: 250, y: 100, width: 40, height: 320 } },
+            { _tag: "Col", title: "Left", frame: { x: 20, y: 100, width: 40, height: 280 } },
+          ],
+        },
+      ],
+    };
+    const nodes = tree._children![0]!._children!;
+    const payload = buildCLICompositionPayloadFromVatQueryResult("Col[frame]", tree, nodes, 3);
+    const text = JSON.stringify(payload);
+
+    const scanned = await runMainCLI(text, ["gfx", "scan", "--direction", "right-to-left", "-"], cliTestEnv);
+
+    expect(scanned.exitCode).toBe(0);
+    expect(normalizeOutput(scanned.stderr)).toBe("");
+
+    const outputFrames = scanned.stdout.trim().split("\n").filter(Boolean)
+      .map(line => parseJSON<CLICompositionPayload>(line));
+
+    expect(outputFrames).toHaveLength(3);
+    expect(outputFrames[0].bounds!.x).toBe(500);  // Right
+    expect(outputFrames[1].bounds!.x).toBe(250);  // Center
+    expect(outputFrames[2].bounds!.x).toBe(20);   // Left
+  });
 });
 
 describe("CLI pipeline process e2e VAT -> gfx matrix", () => {

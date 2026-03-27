@@ -1749,7 +1749,7 @@ export const DEFAULT_GFX_MARKER_COLOR = "#FF3B30";
 export const DEFAULT_GFX_MARKER_SIZE = 4;
 export const DEFAULT_GFX_MARKER_PADDING = 0;
 export const DEFAULT_GFX_MARKER_ROUGHNESS = 0.2;
-export type GfxScanDirection = "top-to-bottom" | "left-to-right";
+export type GfxScanDirection = "top-to-bottom" | "bottom-to-top" | "left-to-right" | "right-to-left";
 export type GfxXrayDirection = "top-to-bottom" | "left-to-right" | "right-to-left" | "bottom-to-top";
 export type GfxOutlineTransition = "fade" | "pop" | "draw";
 export type GfxArrowTarget =
@@ -2295,12 +2295,46 @@ export function buildGfxScanOverlayRequestFromText(
   };
 }
 
+function isReverseGfxScanDirection(direction: GfxScanDirection): boolean {
+  return direction === "bottom-to-top" || direction === "right-to-left";
+}
+
 function leadingEdgeForRect(rect: CLICompositionRect, direction: GfxScanDirection): number {
-  return direction === "left-to-right" ? rect.x : rect.y;
+  switch (direction) {
+    case "bottom-to-top":
+      return rect.y + rect.height;
+    case "right-to-left":
+      return rect.x + rect.width;
+    case "left-to-right":
+      return rect.x;
+    case "top-to-bottom":
+    default:
+      return rect.y;
+  }
 }
 
 function trailingEdgeForRect(rect: CLICompositionRect, direction: GfxScanDirection): number {
-  return direction === "left-to-right" ? rect.x + rect.width : rect.y + rect.height;
+  switch (direction) {
+    case "bottom-to-top":
+      return rect.y;
+    case "right-to-left":
+      return rect.x;
+    case "left-to-right":
+      return rect.x + rect.width;
+    case "top-to-bottom":
+    default:
+      return rect.y + rect.height;
+  }
+}
+
+function compareGfxScanEntries(
+  left: { leadingEdge: number },
+  right: { leadingEdge: number },
+  direction: GfxScanDirection,
+): number {
+  return isReverseGfxScanDirection(direction)
+    ? right.leadingEdge - left.leadingEdge
+    : left.leadingEdge - right.leadingEdge;
 }
 
 function computeGfxScanDelays(
@@ -2313,22 +2347,32 @@ function computeGfxScanDelays(
   }
   const entries = payloads.map((payload, index) => {
     const rects = resolveGfxRectsFromPayload(payload, "gui gfx scan -");
+    const leadingEdges = rects.map(rect => leadingEdgeForRect(rect, direction));
+    const trailingEdges = rects.map(rect => trailingEdgeForRect(rect, direction));
     return {
       payload,
       index,
-      leadingEdge: Math.min(...rects.map(rect => leadingEdgeForRect(rect, direction))),
-      trailingEdge: Math.max(...rects.map(rect => trailingEdgeForRect(rect, direction))),
+      leadingEdge: isReverseGfxScanDirection(direction)
+        ? Math.max(...leadingEdges)
+        : Math.min(...leadingEdges),
+      trailingEdge: isReverseGfxScanDirection(direction)
+        ? Math.min(...trailingEdges)
+        : Math.max(...trailingEdges),
     };
-  }).sort((left, right) => left.leadingEdge - right.leadingEdge || left.index - right.index);
+  }).sort((left, right) => compareGfxScanEntries(left, right, direction) || left.index - right.index);
 
-  const minEdge = Math.min(...entries.map(entry => entry.leadingEdge));
-  const maxEdge = Math.max(...entries.map(entry => entry.trailingEdge));
-  const span = Math.max(maxEdge - minEdge, 0);
+  const startEdge = isReverseGfxScanDirection(direction)
+    ? Math.max(...entries.map(entry => entry.leadingEdge))
+    : Math.min(...entries.map(entry => entry.leadingEdge));
+  const endEdge = isReverseGfxScanDirection(direction)
+    ? Math.min(...entries.map(entry => entry.trailingEdge))
+    : Math.max(...entries.map(entry => entry.trailingEdge));
+  const span = Math.max(Math.abs(endEdge - startEdge), 0);
   let previousDelayMs = 0;
 
   return entries.map((entry) => {
     const absoluteDelayMs = span > 0
-      ? Math.round(((entry.leadingEdge - minEdge) / span) * durationMs)
+      ? Math.round((Math.abs(entry.leadingEdge - startEdge) / span) * durationMs)
       : 0;
     const delayMs = Math.max(0, absoluteDelayMs - previousDelayMs);
     previousDelayMs = absoluteDelayMs;
@@ -2526,8 +2570,13 @@ export function parseGfxScanOptions(
       continue;
     }
     const value = argv[index + 1];
-    if (value !== "top-to-bottom" && value !== "left-to-right") {
-      failUsage(usageTopic, "--direction must be one of: top-to-bottom, left-to-right");
+    if (
+      value !== "top-to-bottom"
+      && value !== "bottom-to-top"
+      && value !== "left-to-right"
+      && value !== "right-to-left"
+    ) {
+      failUsage(usageTopic, "--direction must be one of: top-to-bottom, bottom-to-top, left-to-right, right-to-left");
     }
     direction = value;
     argv.splice(index, 2);

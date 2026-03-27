@@ -88,6 +88,8 @@ const liveGfxCases: LiveGfxCase[] = [
   ...makeCasesForCommand("gfx-scan", [
     { label: "default", args: ["gfx", "scan", "--duration", "50", "-"] },
     { label: "duration", args: ["gfx", "scan", "--duration", "75", "-"] },
+    { label: "bottom-to-top", args: ["gfx", "scan", "--duration", "100", "--direction", "bottom-to-top", "-"] },
+    { label: "right-to-left", args: ["gfx", "scan", "--duration", "125", "--direction", "right-to-left", "-"] },
   ], { supportsEach: true }),
 ];
 
