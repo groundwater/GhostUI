@@ -10,7 +10,8 @@ final class DrawOverlayService {
     private init() {}
     private static let spotlightEpsilon: CGFloat = 0.001
 
-    private var activeContainer: CALayer?
+    private var spotlightContainer: CALayer?
+    private var graphicsContainer: CALayer?
     private var shapeLayersByKey: [String: CAShapeLayer] = [:]
     private var xrayLayersByKey: [String: CALayer] = [:]
     private var attachmentByKey: [String: String] = [:]
@@ -38,13 +39,14 @@ final class DrawOverlayService {
             }
 
             guard let root = OverlayWindowManager.shared.ensureRootLayer() else { return }
-            let container = self.ensureContainer(root: root)
+            let containers = self.ensureContainers(root: root)
 
             guard !payload.items.isEmpty else {
                 return
             }
 
-            var orderedLayers: [(index: Int, layer: CALayer)] = []
+            var orderedGraphicsLayers: [(index: Int, layer: CALayer)] = []
+            var orderedSpotlightLayers: [(index: Int, layer: CALayer)] = []
 
             for (index, item) in payload.items.enumerated() {
                 if item.remove == true {
@@ -70,7 +72,56 @@ final class DrawOverlayService {
                 case .spotlight:
                     guard let rects = item.rects, !rects.isEmpty else { continue }
                     let finalViewRects = rects.map { OverlayWindowManager.shared.screenRectToView($0.cgRect) }
-                    finalPath = Self.makeSpotlightPath(in: container.bounds, cutouts: finalViewRects, cornerRadius: resolvedStyle.cornerRadius ?? 18)
+                    finalPath = Self.makeSpotlightPath(
+                        in: containers.spotlight.bounds,
+                        cutouts: finalViewRects,
+                        cornerRadius: resolvedStyle.cornerRadius ?? 18,
+                        shape: item.spotlightShape
+                    )
+                case .marker:
+                    guard let markerShape = item.markerShape, let markerRect = item.markerRect else { continue }
+                    let markerStyle = item.resolvedMarkerStyle
+                    let layerKey = Self.layerKey(for: item, attachmentId: attachmentId, index: index)
+                    let (shape, isNewLayer) = self.resolveShapeLayer(forKey: layerKey, container: containers.graphics)
+                    self.attachmentByKey[layerKey] = attachmentId
+
+                    let finalViewRect = OverlayWindowManager.shared.screenRectToView(markerRect.cgRect.insetBy(dx: -markerStyle.padding, dy: -markerStyle.padding))
+                    finalPath = Self.makeMarkerPath(shape: markerShape, rect: finalViewRect, style: markerStyle, seed: Self.markerSeed(shape: markerShape, rect: finalViewRect, style: markerStyle))
+
+                    if !isNewLayer {
+                        shape.removeAllAnimations()
+                    }
+
+                    CATransaction.begin()
+                    CATransaction.setDisableActions(true)
+                    shape.frame = containers.graphics.bounds
+                    shape.path = finalPath
+                    shape.strokeColor = markerStyle.color
+                    shape.fillColor = nil
+                    shape.lineWidth = markerStyle.size
+                    shape.opacity = Float(markerStyle.opacity)
+                    shape.lineJoin = .round
+                    shape.lineCap = .round
+                    shape.strokeStart = 0
+                    shape.strokeEnd = 1
+                    shape.lineDashPattern = nil
+                    shape.miterLimit = 1
+                    shape.allowsEdgeAntialiasing = true
+                    shape.fillRule = .nonZero
+                    CATransaction.commit()
+
+                    let animation = item.animation ?? DrawOverlayAnimation(durMs: 260, ease: .easeOut)
+                    let reveal = CABasicAnimation(keyPath: "strokeEnd")
+                    reveal.fromValue = 0
+                    reveal.toValue = 1
+                    reveal.duration = animation.duration
+                    reveal.timingFunction = animation.timingFunction
+                    reveal.isRemovedOnCompletion = true
+                    reveal.fillMode = .removed
+                    shape.add(reveal, forKey: "markerReveal")
+
+                    orderedGraphicsLayers.append((index: index, layer: shape))
+                    continue
                 case .xray:
                     guard let rect = item.rect else { continue }
                     let layerKey = Self.layerKey(for: item, attachmentId: attachmentId, index: index)
@@ -78,15 +129,15 @@ final class DrawOverlayService {
                         forKey: layerKey,
                         attachmentId: attachmentId,
                         screenRect: rect.cgRect,
-                        container: container
+                        container: containers.graphics
                     )
-                    orderedLayers.append((index: index, layer: xrayLayer))
+                    orderedGraphicsLayers.append((index: index, layer: xrayLayer))
                     self.launchXrayCapture(
                         screenRect: rect.cgRect,
                         layerKey: layerKey,
                         attachmentId: attachmentId,
                         generation: generation,
-                        container: container,
+                        container: containers.graphics,
                         animation: item.animation,
                         direction: item.scanDirection
                     )
@@ -94,7 +145,8 @@ final class DrawOverlayService {
                 }
 
                 let layerKey = Self.layerKey(for: item, attachmentId: attachmentId, index: index)
-                let (shape, isNewLayer) = self.resolveShapeLayer(forKey: layerKey, container: container)
+                let targetContainer = item.kind == .spotlight ? containers.spotlight : containers.graphics
+                let (shape, isNewLayer) = self.resolveShapeLayer(forKey: layerKey, container: targetContainer)
                 self.attachmentByKey[layerKey] = attachmentId
 
                 let startState = self.makeStartState(for: shape, item: item, resolvedStyle: resolvedStyle, finalPath: finalPath)
@@ -105,7 +157,7 @@ final class DrawOverlayService {
 
                 CATransaction.begin()
                 CATransaction.setDisableActions(true)
-                shape.frame = container.bounds
+                shape.frame = targetContainer.bounds
                 shape.path = finalPath
                 shape.strokeColor = resolvedStyle.strokeColor
                 shape.lineWidth = resolvedStyle.lineWidth ?? 2
@@ -126,7 +178,13 @@ final class DrawOverlayService {
                     shape.strokeColor = nil
                     shape.lineWidth = 0
                     shape.fillRule = .evenOdd
+                    shape.shadowColor = resolvedStyle.fillColor
+                    shape.shadowOpacity = Float((resolvedStyle.blur ?? 0) > 0 ? 1 : 0)
+                    shape.shadowRadius = resolvedStyle.blur ?? 0
+                    shape.shadowOffset = .zero
                 case .xray:
+                    break
+                case .marker:
                     break
                 }
 
@@ -142,28 +200,43 @@ final class DrawOverlayService {
                     )
                 }
 
-                orderedLayers.append((index: index, layer: shape))
+                if item.kind == .spotlight {
+                    orderedSpotlightLayers.append((index: index, layer: shape))
+                } else {
+                    orderedGraphicsLayers.append((index: index, layer: shape))
+                }
             }
 
-            self.reorder(container: container, layers: orderedLayers.sorted { $0.index < $1.index }.map(\.layer))
-            self.pruneDetachedLayers()
+            self.reorder(container: containers.spotlight, layers: orderedSpotlightLayers.sorted { $0.index < $1.index }.map(\.layer))
+            self.reorder(container: containers.graphics, layers: orderedGraphicsLayers.sorted { $0.index < $1.index }.map(\.layer))
+            self.pruneDetachedLayers(containers: [containers.spotlight, containers.graphics])
         })
     }
 
-    private func ensureContainer(root: CALayer) -> CALayer {
-        if let container = activeContainer {
-            container.frame = root.bounds
-            if container.superlayer == nil {
-                root.addSublayer(container)
-            }
-            return container
-        }
+    private func ensureContainers(root: CALayer) -> (spotlight: CALayer, graphics: CALayer) {
+        let spotlight = ensureContainer(root: root, existing: spotlightContainer, insertAtBack: true)
+        let graphics = ensureContainer(root: root, existing: graphicsContainer, insertAtBack: false)
+        spotlightContainer = spotlight
+        graphicsContainer = graphics
+        return (spotlight: spotlight, graphics: graphics)
+    }
 
-        let container = CALayer()
+    private func ensureContainer(root: CALayer, existing: CALayer?, insertAtBack: Bool) -> CALayer {
+        let container = existing ?? CALayer()
         container.frame = root.bounds
         container.masksToBounds = false
-        root.addSublayer(container)
-        activeContainer = container
+
+        if container.superlayer !== root {
+            container.removeFromSuperlayer()
+            if insertAtBack {
+                root.insertSublayer(container, at: 0)
+            } else {
+                root.addSublayer(container)
+            }
+        } else if insertAtBack {
+            root.insertSublayer(container, at: 0)
+        }
+
         return container
     }
 
@@ -193,6 +266,10 @@ final class DrawOverlayService {
         container: CALayer
     ) -> (CAShapeLayer, Bool) {
         if let layer = shapeLayersByKey[key] {
+            if layer.superlayer !== container {
+                layer.removeFromSuperlayer()
+                container.addSublayer(layer)
+            }
             return (layer, false)
         }
 
@@ -215,11 +292,18 @@ final class DrawOverlayService {
         }
     }
 
-    private func pruneDetachedLayers() {
-        guard let container = activeContainer else { return }
+    private func pruneDetachedLayers(containers: [CALayer]) {
+        let liveContainers = Set(containers.map(ObjectIdentifier.init))
+        guard !liveContainers.isEmpty else { return }
 
-        shapeLayersByKey = shapeLayersByKey.filter { $0.value.superlayer === container }
-        xrayLayersByKey = xrayLayersByKey.filter { $0.value.superlayer === container }
+        shapeLayersByKey = shapeLayersByKey.filter { entry in
+            guard let superlayer = entry.value.superlayer else { return false }
+            return liveContainers.contains(ObjectIdentifier(superlayer))
+        }
+        xrayLayersByKey = xrayLayersByKey.filter { entry in
+            guard let superlayer = entry.value.superlayer else { return false }
+            return liveContainers.contains(ObjectIdentifier(superlayer))
+        }
         xrayCleanupWorkItemsByKey = xrayCleanupWorkItemsByKey.filter { xrayLayersByKey[$0.key] != nil }
         attachmentByKey = attachmentByKey.filter {
             shapeLayersByKey[$0.key] != nil || xrayLayersByKey[$0.key] != nil
@@ -255,7 +339,10 @@ final class DrawOverlayService {
                     strokeColor: item.from?.strokeColor ?? presentation?.strokeColor ?? shape.strokeColor,
                     fillColor: item.from?.fillColor ?? presentation?.fillColor ?? shape.fillColor,
                     lineWidth: item.from?.lineWidth ?? shape.lineWidth,
-                    opacity: item.from?.opacity.map(Float.init) ?? shape.opacity
+                    opacity: item.from?.opacity.map(Float.init) ?? shape.opacity,
+                    shadowColor: shape.shadowColor,
+                    shadowOpacity: shape.shadowOpacity,
+                    shadowRadius: shape.shadowRadius
                 )
             }
         case .line:
@@ -269,12 +356,29 @@ final class DrawOverlayService {
                     strokeColor: item.from?.strokeColor ?? presentation?.strokeColor ?? shape.strokeColor,
                     fillColor: nil,
                     lineWidth: item.from?.lineWidth ?? shape.lineWidth,
-                    opacity: item.from?.opacity.map(Float.init) ?? shape.opacity
+                    opacity: item.from?.opacity.map(Float.init) ?? shape.opacity,
+                    shadowColor: shape.shadowColor,
+                    shadowOpacity: shape.shadowOpacity,
+                    shadowRadius: shape.shadowRadius
                 )
             }
         case .xray:
             break // xray items are handled separately via launchXrayCapture
         case .spotlight:
+            if shape.presentation() == nil {
+                return DrawOverlayRenderState(
+                    path: finalPath,
+                    strokeColor: nil,
+                    fillColor: resolvedStyle.fillColor,
+                    lineWidth: 0,
+                    opacity: 0,
+                    shadowColor: resolvedStyle.fillColor,
+                    shadowOpacity: 0,
+                    shadowRadius: 0
+                )
+            }
+            break
+        case .marker:
             break
         }
 
@@ -284,7 +388,10 @@ final class DrawOverlayService {
                 strokeColor: presentation.strokeColor ?? shape.strokeColor,
                 fillColor: presentation.fillColor ?? shape.fillColor,
                 lineWidth: presentation.lineWidth,
-                opacity: presentation.opacity
+                opacity: presentation.opacity,
+                shadowColor: presentation.shadowColor ?? shape.shadowColor,
+                shadowOpacity: presentation.shadowOpacity,
+                shadowRadius: presentation.shadowRadius
             )
         }
 
@@ -293,7 +400,10 @@ final class DrawOverlayService {
             strokeColor: shape.strokeColor,
             fillColor: shape.fillColor,
             lineWidth: shape.lineWidth,
-            opacity: shape.opacity
+            opacity: shape.opacity,
+            shadowColor: shape.shadowColor,
+            shadowOpacity: shape.shadowOpacity,
+            shadowRadius: shape.shadowRadius
         )
     }
 
@@ -307,6 +417,9 @@ final class DrawOverlayService {
         var animations: [CAAnimation] = []
         let endLineWidth = end.lineWidth ?? start.lineWidth
         let endOpacity = end.opacity.map(Float.init) ?? start.opacity
+        let endShadowOpacity: Float = end.blur == nil || (end.blur ?? 0) <= 0 ? 0 : 1
+        let endShadowRadius = end.blur ?? start.shadowRadius
+        let endShadowColor = end.fillColor ?? start.shadowColor
 
         if let startPath = start.path, !Self.pathsEqual(startPath, finalPath) {
             let pathAnimation = CABasicAnimation(keyPath: "path")
@@ -353,6 +466,33 @@ final class DrawOverlayService {
             animations.append(opacityAnimation)
         }
 
+        if start.shadowOpacity != endShadowOpacity {
+            let shadowOpacityAnimation = CABasicAnimation(keyPath: "shadowOpacity")
+            shadowOpacityAnimation.fromValue = start.shadowOpacity
+            shadowOpacityAnimation.toValue = endShadowOpacity
+            shadowOpacityAnimation.duration = animation.duration
+            shadowOpacityAnimation.timingFunction = animation.timingFunction
+            animations.append(shadowOpacityAnimation)
+        }
+
+        if start.shadowRadius != endShadowRadius {
+            let shadowRadiusAnimation = CABasicAnimation(keyPath: "shadowRadius")
+            shadowRadiusAnimation.fromValue = start.shadowRadius
+            shadowRadiusAnimation.toValue = endShadowRadius
+            shadowRadiusAnimation.duration = animation.duration
+            shadowRadiusAnimation.timingFunction = animation.timingFunction
+            animations.append(shadowRadiusAnimation)
+        }
+
+        if let startShadow = start.shadowColor, let endShadow = endShadowColor, !Self.colorsEqual(startShadow, endShadow) {
+            let shadowColorAnimation = CABasicAnimation(keyPath: "shadowColor")
+            shadowColorAnimation.fromValue = startShadow
+            shadowColorAnimation.toValue = endShadow
+            shadowColorAnimation.duration = animation.duration
+            shadowColorAnimation.timingFunction = animation.timingFunction
+            animations.append(shadowColorAnimation)
+        }
+
         guard !animations.isEmpty else {
             return
         }
@@ -380,13 +520,264 @@ final class DrawOverlayService {
         return path
     }
 
-    static func makeSpotlightPath(in bounds: CGRect, cutouts: [CGRect], cornerRadius: CGFloat) -> CGPath {
+    private static func makeMarkerPath(
+        shape: DrawOverlayMarkerShape,
+        rect: CGRect,
+        style: DrawOverlayMarkerStyle,
+        seed: UInt64
+    ) -> CGPath {
+        var random = StableRandom(seed: seed)
+        let path = CGMutablePath()
+
+        switch shape {
+        case .rect:
+            addRoughClosedPath(path, points: markerRectanglePoints(in: rect, style: style, random: &random))
+        case .circ:
+            addSmoothClosedPath(path, points: markerCirclePoints(in: rect, style: style, random: &random))
+        case .check:
+            for stroke in markerCheckPoints(in: rect, style: style, random: &random) {
+                addSmoothOpenPath(path, points: stroke)
+            }
+        case .cross:
+            for stroke in markerCrossPoints(in: rect, style: style, random: &random) {
+                addSmoothOpenPath(path, points: stroke)
+            }
+        case .underline:
+            addSmoothOpenPath(path, points: markerUnderlinePoints(in: rect, style: style, random: &random))
+        }
+
+        return path
+    }
+
+    private static func markerSeed(shape: DrawOverlayMarkerShape, rect: CGRect, style: DrawOverlayMarkerStyle) -> UInt64 {
+        var hasher = StableHasher()
+        hasher.combine(shape.rawValue)
+        hasher.combine(rect.origin.x)
+        hasher.combine(rect.origin.y)
+        hasher.combine(rect.width)
+        hasher.combine(rect.height)
+        hasher.combine(style.size)
+        hasher.combine(style.padding)
+        hasher.combine(style.roughness)
+        hasher.combine(style.opacity)
+        return hasher.finalize()
+    }
+
+    private static func markerRectanglePoints(in rect: CGRect, style: DrawOverlayMarkerStyle, random: inout StableRandom) -> [CGPoint] {
+        let jitter = markerJitter(in: rect, style: style)
+        let anchorJitterX = max(rect.width * 0.05, jitter * (0.75 + style.roughness * 0.45))
+        let anchorJitterY = max(rect.height * 0.05, jitter * (0.75 + style.roughness * 0.45))
+        return [
+            CGPoint(
+                x: rect.minX + random.uniform(-anchorJitterX, anchorJitterX),
+                y: rect.minY + random.uniform(-anchorJitterY, anchorJitterY)
+            ),
+            CGPoint(
+                x: rect.maxX + random.uniform(-anchorJitterX, anchorJitterX),
+                y: rect.minY + random.uniform(-anchorJitterY, anchorJitterY)
+            ),
+            CGPoint(
+                x: rect.maxX + random.uniform(-anchorJitterX, anchorJitterX),
+                y: rect.maxY + random.uniform(-anchorJitterY, anchorJitterY)
+            ),
+            CGPoint(
+                x: rect.minX + random.uniform(-anchorJitterX, anchorJitterX),
+                y: rect.maxY + random.uniform(-anchorJitterY, anchorJitterY)
+            ),
+        ]
+    }
+
+    private static func markerCirclePoints(in rect: CGRect, style: DrawOverlayMarkerStyle, random: inout StableRandom) -> [CGPoint] {
+        let jitter = markerJitter(in: rect, style: style)
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let radiusX = max(rect.width * 0.5, style.size)
+        let radiusY = max(rect.height * 0.5, style.size)
+        let pointCount = min(28, max(12, Int((max(rect.width, rect.height) / max(style.size * 1.5, 1)).rounded(.up))))
+
+        var result: [CGPoint] = []
+        for index in 0..<pointCount {
+            let progress = CGFloat(index) / CGFloat(pointCount)
+            let angle = (progress * 2 * .pi) - (.pi / 2)
+            let radialJitter = random.uniform(-jitter, jitter) * (0.4 + style.roughness * 0.6)
+            result.append(
+                CGPoint(
+                    x: center.x + cos(angle) * (radiusX + radialJitter),
+                    y: center.y + sin(angle) * (radiusY + radialJitter)
+                )
+            )
+        }
+        return result
+    }
+
+    private static func markerCheckPoints(in rect: CGRect, style: DrawOverlayMarkerStyle, random: inout StableRandom) -> [[CGPoint]] {
+        let jitter = markerJitter(in: rect, style: style)
+        let start1 = CGPoint(
+            x: rect.minX + rect.width * 0.20 + random.uniform(-jitter, jitter) * 0.4,
+            y: rect.minY + rect.height * 0.55 + random.uniform(-jitter, jitter) * 0.4
+        )
+        let end1 = CGPoint(
+            x: rect.minX + rect.width * 0.42 + random.uniform(-jitter, jitter) * 0.4,
+            y: rect.maxY - rect.height * 0.10 + random.uniform(-jitter, jitter) * 0.4
+        )
+        let start2 = CGPoint(
+            x: rect.minX + rect.width * 0.40 + random.uniform(-jitter, jitter) * 0.45,
+            y: rect.maxY - rect.height * 0.15 + random.uniform(-jitter, jitter) * 0.45
+        )
+        let end2 = CGPoint(
+            x: rect.maxX - rect.width * 0.12 + random.uniform(-jitter, jitter) * 0.45,
+            y: rect.minY + rect.height * 0.18 + random.uniform(-jitter, jitter) * 0.45
+        )
+        return [
+            roughStrokePoints(from: start1, to: end1, style: style, random: &random),
+            roughStrokePoints(from: start2, to: end2, style: style, random: &random),
+        ]
+    }
+
+    private static func markerCrossPoints(in rect: CGRect, style: DrawOverlayMarkerStyle, random: inout StableRandom) -> [[CGPoint]] {
+        let jitter = markerJitter(in: rect, style: style)
+        let firstStart = CGPoint(
+            x: rect.minX + rect.width * 0.12 + random.uniform(-jitter, jitter) * 0.5,
+            y: rect.minY + rect.height * 0.16 + random.uniform(-jitter, jitter) * 0.5
+        )
+        let firstEnd = CGPoint(
+            x: rect.maxX - rect.width * 0.10 + random.uniform(-jitter, jitter) * 0.5,
+            y: rect.maxY - rect.height * 0.12 + random.uniform(-jitter, jitter) * 0.5
+        )
+        let secondStart = CGPoint(
+            x: rect.maxX - rect.width * 0.12 + random.uniform(-jitter, jitter) * 0.5,
+            y: rect.minY + rect.height * 0.18 + random.uniform(-jitter, jitter) * 0.5
+        )
+        let secondEnd = CGPoint(
+            x: rect.minX + rect.width * 0.10 + random.uniform(-jitter, jitter) * 0.5,
+            y: rect.maxY - rect.height * 0.10 + random.uniform(-jitter, jitter) * 0.5
+        )
+        return [
+            roughStrokePoints(from: firstStart, to: firstEnd, style: style, random: &random),
+            roughStrokePoints(from: secondStart, to: secondEnd, style: style, random: &random),
+        ]
+    }
+
+    private static func markerUnderlinePoints(in rect: CGRect, style: DrawOverlayMarkerStyle, random: inout StableRandom) -> [CGPoint] {
+        let jitter = markerJitter(in: rect, style: style)
+        let yBase = rect.maxY - max(style.size * 0.55, rect.height * 0.08)
+        let start = CGPoint(
+            x: rect.minX - style.size * 0.35,
+            y: yBase + random.uniform(-jitter, jitter) * 0.2
+        )
+        let end = CGPoint(
+            x: rect.maxX + style.size * 0.35,
+            y: yBase + random.uniform(-jitter, jitter) * 0.2
+        )
+        return roughStrokePoints(from: start, to: end, style: style, random: &random)
+    }
+
+    private static func roughStrokePoints(
+        from start: CGPoint,
+        to end: CGPoint,
+        style: DrawOverlayMarkerStyle,
+        random: inout StableRandom
+    ) -> [CGPoint] {
+        let delta = CGPoint(x: end.x - start.x, y: end.y - start.y)
+        let length = max(hypot(delta.x, delta.y), 1)
+        let tangent = CGPoint(x: delta.x / length, y: delta.y / length)
+        let normal = CGPoint(x: -tangent.y, y: tangent.x)
+        let jitter = markerJitter(length: length, style: style)
+        let drift = jitter * (0.35 + style.roughness * 0.35)
+
+        let startPoint = CGPoint(
+            x: start.x + tangent.x * random.uniform(-style.size * 0.28, style.size * 0.24) + normal.x * random.uniform(-drift, drift),
+            y: start.y + tangent.y * random.uniform(-style.size * 0.28, style.size * 0.24) + normal.y * random.uniform(-drift, drift)
+        )
+        let mid1 = CGPoint(
+            x: start.x + delta.x * 0.33 + normal.x * random.uniform(-jitter, jitter) + tangent.x * random.uniform(-jitter * 0.12, jitter * 0.12),
+            y: start.y + delta.y * 0.33 + normal.y * random.uniform(-jitter, jitter) + tangent.y * random.uniform(-jitter * 0.12, jitter * 0.12)
+        )
+        let mid2 = CGPoint(
+            x: start.x + delta.x * 0.68 + normal.x * random.uniform(-jitter, jitter) + tangent.x * random.uniform(-jitter * 0.12, jitter * 0.12),
+            y: start.y + delta.y * 0.68 + normal.y * random.uniform(-jitter, jitter) + tangent.y * random.uniform(-jitter * 0.12, jitter * 0.12)
+        )
+        let endPoint = CGPoint(
+            x: end.x + tangent.x * random.uniform(-style.size * 0.18, style.size * 0.32) + normal.x * random.uniform(-drift, drift),
+            y: end.y + tangent.y * random.uniform(-style.size * 0.18, style.size * 0.32) + normal.y * random.uniform(-drift, drift)
+        )
+
+        return [startPoint, mid1, mid2, endPoint]
+    }
+
+    private static func markerJitter(in rect: CGRect, style: DrawOverlayMarkerStyle) -> CGFloat {
+        let base = max(style.size * (0.08 + style.roughness * 0.45), 0.35)
+        let rectScale = max(1, min(rect.width, rect.height) * 0.035)
+        return min(rectScale, max(base, style.size * 0.1))
+    }
+
+    private static func markerJitter(length: CGFloat, style: DrawOverlayMarkerStyle) -> CGFloat {
+        let base = max(style.size * (0.10 + style.roughness * 0.55), 0.35)
+        let lengthScale = max(0.8, length * 0.035)
+        return min(lengthScale, base)
+    }
+
+    private static func addSmoothClosedPath(_ path: CGMutablePath, points: [CGPoint]) {
+        guard points.count >= 2 else { return }
+        path.move(to: points[0])
+        let count = points.count
+        for index in 0..<count {
+            let p0 = points[(index - 1 + count) % count]
+            let p1 = points[index]
+            let p2 = points[(index + 1) % count]
+            let p3 = points[(index + 2) % count]
+            let cp1 = CGPoint(x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6)
+            let cp2 = CGPoint(x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6)
+            path.addCurve(to: p2, control1: cp1, control2: cp2)
+        }
+        path.closeSubpath()
+    }
+
+    private static func addRoughClosedPath(_ path: CGMutablePath, points: [CGPoint]) {
+        guard points.count >= 2 else { return }
+        path.move(to: points[0])
+        for point in points.dropFirst() {
+            path.addLine(to: point)
+        }
+        path.closeSubpath()
+    }
+
+    private static func addSmoothOpenPath(_ path: CGMutablePath, points: [CGPoint]) {
+        guard points.count >= 2 else { return }
+        path.move(to: points[0])
+        if points.count == 2 {
+            path.addLine(to: points[1])
+            return
+        }
+
+        for index in 0..<(points.count - 1) {
+            let p0 = index == 0 ? points[0] : points[index - 1]
+            let p1 = points[index]
+            let p2 = points[index + 1]
+            let p3 = index + 2 < points.count ? points[index + 2] : points[points.count - 1]
+            let cp1 = CGPoint(x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6)
+            let cp2 = CGPoint(x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6)
+            path.addCurve(to: p2, control1: cp1, control2: cp2)
+        }
+    }
+
+    fileprivate static func makeSpotlightPath(in bounds: CGRect, cutouts: [CGRect], cornerRadius: CGFloat, shape: DrawOverlaySpotlightShape?) -> CGPath {
         let path = CGMutablePath()
         path.addRect(bounds)
-        let coalescedCutouts = coalescedSpotlightCutouts(cutouts)
-        let usesRoundedCutouts = coalescedCutouts.count == cutouts.count
-        for cutout in coalescedCutouts {
-            path.addPath(makeRectPath(for: cutout, cornerRadius: usesRoundedCutouts ? cornerRadius : 0))
+        let spotlightShape = shape ?? .rect
+        let cutoutRects: [CGRect]
+        switch spotlightShape {
+        case .rect:
+            let coalescedCutouts = coalescedSpotlightCutouts(cutouts)
+            let usesRoundedCutouts = coalescedCutouts.count == cutouts.count
+            cutoutRects = coalescedCutouts
+            for cutout in cutoutRects {
+                path.addPath(makeRectPath(for: cutout, cornerRadius: usesRoundedCutouts ? cornerRadius : 0))
+            }
+        case .circ:
+            cutoutRects = cutouts.map(\.standardized).filter { $0.width > 0 && $0.height > 0 }
+            for cutout in cutoutRects {
+                path.addEllipse(in: cutout)
+            }
         }
         return path
     }
@@ -821,9 +1212,11 @@ private struct DrawOverlayItem: Decodable {
     let kind: DrawOverlayKind
     let remove: Bool?
     let rect: DrawOverlayRect?
+    let box: DrawOverlayRect?
     let rects: [DrawOverlayRect]?
     let line: DrawOverlayLine?
     let direction: String?
+    let shape: String?
     let from: DrawOverlayItemFrom?
     let animation: DrawOverlayAnimation?
     let style: DrawOverlayStyle?
@@ -840,7 +1233,66 @@ private extension DrawOverlayItem {
             return style ?? .defaultLineStyle
         case .spotlight:
             return style ?? .defaultSpotlightStyle
+        case .marker:
+            return style ?? .defaultMarkerStyle
         }
+    }
+
+    var spotlightShape: DrawOverlaySpotlightShape? {
+        guard kind == .spotlight else {
+            return nil
+        }
+        let raw = shape?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch raw {
+        case nil, "":
+            return .rect
+        case "rect":
+            return .rect
+        case "circ", "circle":
+            return .circ
+        default:
+            return nil
+        }
+    }
+
+    var markerShape: DrawOverlayMarkerShape? {
+        let raw = shape?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch raw {
+        case "rect":
+            return .rect
+        case "circ", "circle":
+            return .circ
+        case "check":
+            return .check
+        case "cross":
+            return .cross
+        case "underline":
+            return .underline
+        default:
+            return nil
+        }
+    }
+
+    var markerRect: DrawOverlayRect? {
+        rect ?? box
+    }
+
+    var resolvedMarkerStyle: DrawOverlayMarkerStyle {
+        let source = style ?? .defaultMarkerStyle
+        let defaultMarkerColor = DrawOverlayStyle.defaultMarkerStyle.markerColor ?? CGColor(red: 0, green: 0.89, blue: 1, alpha: 1)
+        let defaultMarkerSize = DrawOverlayStyle.defaultMarkerStyle.size ?? 4
+        let defaultMarkerPadding = DrawOverlayStyle.defaultMarkerStyle.padding ?? 8
+        let defaultMarkerRoughness = DrawOverlayStyle.defaultMarkerStyle.roughness ?? 0.22
+        let defaultMarkerOpacity = DrawOverlayStyle.defaultMarkerStyle.opacity ?? 1
+        let color = source.color.flatMap(DrawOverlayStyle.parseColor)
+            ?? source.stroke.flatMap(DrawOverlayStyle.parseColor)
+            ?? source.fill.flatMap(DrawOverlayStyle.parseColor)
+            ?? defaultMarkerColor
+        let size = max(0.5, source.size ?? defaultMarkerSize)
+        let padding = max(0, source.padding ?? defaultMarkerPadding)
+        let roughness = min(max(source.roughness ?? defaultMarkerRoughness, 0), 1)
+        let opacity = min(max(source.opacity ?? defaultMarkerOpacity, 0), 1)
+        return DrawOverlayMarkerStyle(color: color, size: size, padding: padding, roughness: roughness, opacity: opacity)
     }
 
     var scanDirection: DrawOverlayScanDirection {
@@ -876,6 +1328,7 @@ private enum DrawOverlayKind: String, Decodable {
     case line
     case xray
     case spotlight
+    case marker
 }
 
 private enum DrawOverlayScanDirection: String {
@@ -892,6 +1345,11 @@ private enum DrawOverlayScanDirection: String {
             return false
         }
     }
+}
+
+fileprivate enum DrawOverlaySpotlightShape: String, Decodable {
+    case rect
+    case circ
 }
 
 private struct DrawOverlayLine: Decodable {
@@ -955,7 +1413,12 @@ private struct DrawOverlayStyle: Decodable {
         fill: "#00E5FF18",
         lineWidth: 2,
         cornerRadius: 8,
-        opacity: 1
+        opacity: 1,
+        color: nil,
+        size: nil,
+        padding: nil,
+        roughness: nil,
+        blur: nil
     )
 
     static let defaultLineStyle = DrawOverlayStyle(
@@ -963,14 +1426,36 @@ private struct DrawOverlayStyle: Decodable {
         fill: nil,
         lineWidth: 2,
         cornerRadius: nil,
-        opacity: 1
+        opacity: 1,
+        color: nil,
+        size: nil,
+        padding: nil,
+        roughness: nil,
+        blur: nil
     )
     static let defaultSpotlightStyle = DrawOverlayStyle(
         stroke: nil,
         fill: "#000000B8",
         lineWidth: nil,
         cornerRadius: 18,
-        opacity: 1
+        opacity: 1,
+        color: nil,
+        size: nil,
+        padding: nil,
+        roughness: nil,
+        blur: nil
+    )
+    static let defaultMarkerStyle = DrawOverlayStyle(
+        stroke: nil,
+        fill: nil,
+        lineWidth: nil,
+        cornerRadius: nil,
+        opacity: 1,
+        color: "#00E5FF",
+        size: 4,
+        padding: 8,
+        roughness: 0.22,
+        blur: nil
     )
 
     let stroke: String?
@@ -978,6 +1463,15 @@ private struct DrawOverlayStyle: Decodable {
     let lineWidth: CGFloat?
     let cornerRadius: CGFloat?
     let opacity: CGFloat?
+    let color: String?
+    let size: CGFloat?
+    let padding: CGFloat?
+    let roughness: CGFloat?
+    let blur: CGFloat?
+
+    private static let hexColorPattern = "^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$"
+    private static let rgbColorPattern = "^rgb\\(\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*,\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*,\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*\\)$"
+    private static let rgbaColorPattern = "^rgba\\(\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*,\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*,\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*,\\s*([+-]?(?:\\d+|\\d*\\.\\d+|\\.\\d+))\\s*\\)$"
 
     var strokeColor: CGColor? {
         stroke.flatMap(Self.parseColor)
@@ -987,26 +1481,183 @@ private struct DrawOverlayStyle: Decodable {
         fill.flatMap(Self.parseColor)
     }
 
+    var markerColor: CGColor? {
+        color.flatMap(Self.parseColor)
+    }
+
     fileprivate static func parseColor(_ value: String) -> CGColor? {
-        let hex = value.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-        guard hex.count == 6 || hex.count == 8, let intValue = UInt64(hex, radix: 16) else {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("#") {
+            return parseHexColor(trimmed)
+        }
+
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("rgb(") || lower.hasPrefix("rgba(") {
+            return parseRGBColor(trimmed)
+        }
+
+        return nil
+    }
+
+    private static func parseHexColor(_ value: String) -> CGColor? {
+        guard value.range(of: hexColorPattern, options: .regularExpression) != nil else {
             return nil
         }
 
-        let r, g, b, a: CGFloat
-        if hex.count == 6 {
-            r = CGFloat((intValue >> 16) & 0xFF) / 255
-            g = CGFloat((intValue >> 8) & 0xFF) / 255
-            b = CGFloat(intValue & 0xFF) / 255
-            a = 1
-        } else {
-            r = CGFloat((intValue >> 24) & 0xFF) / 255
-            g = CGFloat((intValue >> 16) & 0xFF) / 255
-            b = CGFloat((intValue >> 8) & 0xFF) / 255
-            a = CGFloat(intValue & 0xFF) / 255
+        let hex = String(value.dropFirst())
+        let expanded: String
+        switch hex.count {
+        case 3:
+            expanded = hex.map { "\($0)\($0)" }.joined() + "FF"
+        case 4:
+            expanded = hex.map { "\($0)\($0)" }.joined()
+        case 6:
+            expanded = hex + "FF"
+        case 8:
+            expanded = hex
+        default:
+            return nil
         }
 
+        guard let intValue = UInt64(expanded, radix: 16) else {
+            return nil
+        }
+
+        let r = CGFloat((intValue >> 24) & 0xFF) / 255
+        let g = CGFloat((intValue >> 16) & 0xFF) / 255
+        let b = CGFloat((intValue >> 8) & 0xFF) / 255
+        let a = CGFloat(intValue & 0xFF) / 255
         return CGColor(red: r, green: g, blue: b, alpha: a)
+    }
+
+    private static func parseRGBColor(_ value: String) -> CGColor? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let matches = matchColorPattern(trimmed, pattern: rgbColorPattern), matches.count == 4 {
+            guard
+                let r = parseRGBComponent(matches[1]),
+                let g = parseRGBComponent(matches[2]),
+                let b = parseRGBComponent(matches[3])
+            else {
+                return nil
+            }
+            return CGColor(red: r, green: g, blue: b, alpha: 1)
+        }
+
+        if let matches = matchColorPattern(trimmed, pattern: rgbaColorPattern), matches.count == 5 {
+            guard
+                let r = parseRGBComponent(matches[1]),
+                let g = parseRGBComponent(matches[2]),
+                let b = parseRGBComponent(matches[3]),
+                let a = parseAlphaComponent(matches[4])
+            else {
+                return nil
+            }
+            return CGColor(red: r, green: g, blue: b, alpha: a)
+        }
+
+        return nil
+    }
+
+    private static func parseRGBComponent(_ value: String) -> CGFloat? {
+        guard isStrictDecimal(value), let number = Double(value), number >= 0, number <= 255 else {
+            return nil
+        }
+        return CGFloat(number / 255.0)
+    }
+
+    private static func parseAlphaComponent(_ value: String) -> CGFloat? {
+        guard isStrictDecimal(value), let number = Double(value), number >= 0, number <= 1 else {
+            return nil
+        }
+        return CGFloat(number)
+    }
+
+    private static func isStrictDecimal(_ value: String) -> Bool {
+        value.range(of: #"^[+-]?(?:\d+|\d*\.\d+|\.\d+)$"#, options: .regularExpression) != nil
+    }
+
+    private static func matchColorPattern(_ value: String, pattern: String) -> [String]? {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return nil
+        }
+
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        guard let match = regex.firstMatch(in: value, options: [], range: range) else {
+            return nil
+        }
+
+        return (0..<match.numberOfRanges).compactMap { index in
+            guard let range = Range(match.range(at: index), in: value) else {
+                return nil
+            }
+            return String(value[range])
+        }
+    }
+}
+
+private enum DrawOverlayMarkerShape: String {
+    case rect
+    case circ
+    case check
+    case cross
+    case underline
+}
+
+private struct DrawOverlayMarkerStyle {
+    let color: CGColor
+    let size: CGFloat
+    let padding: CGFloat
+    let roughness: CGFloat
+    let opacity: CGFloat
+}
+
+private struct StableHasher {
+    private var state: UInt64 = 0xcbf29ce484222325
+
+    mutating func combine(_ value: UInt64) {
+        state ^= value
+        state &*= 0x100000001b3
+    }
+
+    mutating func combine(_ value: Double) {
+        combine(value.bitPattern)
+    }
+
+    mutating func combine(_ value: CGFloat) {
+        combine(Double(value))
+    }
+
+    mutating func combine(_ value: String) {
+        for byte in value.utf8 {
+            combine(UInt64(byte))
+        }
+    }
+
+    func finalize() -> UInt64 {
+        state
+    }
+}
+
+private struct StableRandom {
+    private var state: UInt64
+
+    init(seed: UInt64) {
+        state = seed == 0 ? 0x9E3779B97F4A7C15 : seed
+    }
+
+    mutating func nextUInt64() -> UInt64 {
+        state &+= 0x9E3779B97F4A7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+        z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+        return z ^ (z >> 31)
+    }
+
+    mutating func uniform(_ lower: CGFloat, _ upper: CGFloat) -> CGFloat {
+        guard upper > lower else { return lower }
+        let unit = CGFloat(Double(nextUInt64()) / Double(UInt64.max))
+        return lower + (upper - lower) * unit
     }
 }
 
@@ -1016,4 +1667,7 @@ private struct DrawOverlayRenderState {
     let fillColor: CGColor?
     let lineWidth: CGFloat
     let opacity: Float
+    let shadowColor: CGColor?
+    let shadowOpacity: Float
+    let shadowRadius: CGFloat
 }

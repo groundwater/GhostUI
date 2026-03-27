@@ -18,18 +18,18 @@ screenshot.png
 # Node / Bun
 node_modules/
 bun.lock
-ghost/dist/
+macOS/ghost/dist/
 
 # Local scratch artifacts (captures, tree dumps, diffs, etc.)
 Local/
 
 # Test results (Playwright etc.)
 test-results/
-ghost/test-results/
+macOS/ghost/test-results/
 
 # Runtime logs
 daemon.log
 
 # Generated/runtime asset we do not want in git history
-ghost/src/assets/wallpaper.jpg
-ghost/native/build/
+macOS/ghost/src/assets/wallpaper.jpg
+macOS/ghost/native/build/

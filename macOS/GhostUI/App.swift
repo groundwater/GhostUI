@@ -294,7 +294,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let durationMs = json["durationMs"] as? Int ?? 500
-        ScanOverlayService.shared.playScan(rects: rects, outlineRects: outlineRects, durationMs: durationMs)
+        let direction = (json["direction"] as? String) ?? "top-to-bottom"
+        ScanOverlayService.shared.playScan(
+            rects: rects,
+            outlineRects: outlineRects,
+            durationMs: durationMs,
+            direction: direction
+        )
     }
 
     @objc private func handleOverlayDrawNotification(_ notification: Notification) {
